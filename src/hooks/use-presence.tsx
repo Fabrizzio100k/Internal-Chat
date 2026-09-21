@@ -5,8 +5,22 @@ import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 
 const PRESENCE_CHANNEL_NAME = "presence:online-users";
+const MAX_RETRY_DELAY_MS = 30_000;
 
-const PresenceContext = createContext<Set<string>>(new Set());
+type PresenceContextValue = {
+  onlineUserIds: Set<string>;
+  /**
+   * false si el canal de Realtime nunca logró conectar (p. ej. un firewall/
+   * proxy de red bloqueando WebSockets). Cuando es false, el estado "online"
+   * de todos los usuarios no es confiable, no significa que estén offline.
+   */
+  isRealtimeConnected: boolean;
+};
+
+const PresenceContext = createContext<PresenceContextValue>({
+  onlineUserIds: new Set(),
+  isRealtimeConnected: false,
+});
 
 /**
  * Proveedor único de presencia para toda la sección /chat. Abre un solo
@@ -14,6 +28,10 @@ const PresenceContext = createContext<Set<string>>(new Set());
  * hijos (ChatSidebar, ChatWindow, etc.) vía Context, evitando el error
  * "cannot add presence callbacks after subscribe()" que ocurre cuando
  * múltiples componentes intentan suscribirse por separado al mismo canal.
+ *
+ * Si el WebSocket no puede conectar (firewall/proxy de red bloqueando
+ * wss://, común en redes corporativas), reintenta con backoff exponencial
+ * en vez de rendirse tras el primer fallo.
  */
 export function PresenceProvider({
   currentUserId,
@@ -23,55 +41,81 @@ export function PresenceProvider({
   children: React.ReactNode;
 }) {
   const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(new Set());
+  const [isRealtimeConnected, setIsRealtimeConnected] = useState(false);
   const channelRef = useRef<RealtimeChannel | null>(null);
+  const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryCountRef = useRef(0);
+  const isUnmountedRef = useRef(false);
 
   useEffect(() => {
+    isUnmountedRef.current = false;
     const supabase = createSupabaseBrowserClient();
-    const channel = supabase.channel(PRESENCE_CHANNEL_NAME, {
-      config: { presence: { key: currentUserId } },
-    });
-    channelRef.current = channel;
 
-    const syncOnlineUsers = () => {
-      const state = channel.presenceState();
-      setOnlineUserIds(new Set(Object.keys(state)));
-    };
-
-    channel
-      .on("presence", { event: "sync" }, syncOnlineUsers)
-      .on("presence", { event: "join" }, syncOnlineUsers)
-      .on("presence", { event: "leave" }, syncOnlineUsers)
-      .subscribe(async (status, err) => {
-        if (status === "SUBSCRIBED") {
-          const trackResult = await channel.track({
-            userId: currentUserId,
-            onlineAt: new Date().toISOString(),
-          });
-          if (trackResult !== "ok") {
-            console.error("[presence] track() no devolvió 'ok':", trackResult);
-          }
-          return;
-        }
-
-        // CHANNEL_ERROR, TIMED_OUT o CLOSED: antes esto quedaba en silencio
-        // total. Lo logueamos para poder diagnosticar fallos de conexión
-        // en producción (proxies, latencia, RLS, etc.) desde la consola.
-        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-          console.error(`[presence] Falló la conexión al canal (${status}):`, err);
-        }
+    function connect() {
+      const channel = supabase.channel(PRESENCE_CHANNEL_NAME, {
+        config: { presence: { key: currentUserId } },
       });
+      channelRef.current = channel;
+
+      const syncOnlineUsers = () => {
+        const state = channel.presenceState();
+        setOnlineUserIds(new Set(Object.keys(state)));
+      };
+
+      channel
+        .on("presence", { event: "sync" }, syncOnlineUsers)
+        .on("presence", { event: "join" }, syncOnlineUsers)
+        .on("presence", { event: "leave" }, syncOnlineUsers)
+        .subscribe(async (status, err) => {
+          if (status === "SUBSCRIBED") {
+            retryCountRef.current = 0;
+            setIsRealtimeConnected(true);
+            const trackResult = await channel.track({
+              userId: currentUserId,
+              onlineAt: new Date().toISOString(),
+            });
+            if (trackResult !== "ok") {
+              console.error("[presence] track() no devolvió 'ok':", trackResult);
+            }
+            return;
+          }
+
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+            // Frecuente en redes corporativas/con firewall que bloquean
+            // WebSockets salientes: no es un bug de la app, es la red del
+            // cliente. Reintentamos con backoff en vez de quedarnos colgados.
+            console.error(`[presence] Falló la conexión al canal (${status}):`, err);
+            setIsRealtimeConnected(false);
+
+            if (isUnmountedRef.current) return;
+
+            const delay = Math.min(1000 * 2 ** retryCountRef.current, MAX_RETRY_DELAY_MS);
+            retryCountRef.current += 1;
+            supabase.removeChannel(channel);
+            retryTimeoutRef.current = setTimeout(() => {
+              if (!isUnmountedRef.current) connect();
+            }, delay);
+          }
+        });
+    }
+
+    connect();
 
     return () => {
-      channelRef.current = null;
-      supabase.removeChannel(channel);
+      isUnmountedRef.current = true;
+      if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
+      if (channelRef.current) supabase.removeChannel(channelRef.current);
     };
   }, [currentUserId]);
 
-  return <PresenceContext.Provider value={onlineUserIds}>{children}</PresenceContext.Provider>;
+  return (
+    <PresenceContext.Provider value={{ onlineUserIds, isRealtimeConnected }}>
+      {children}
+    </PresenceContext.Provider>
+  );
 }
 
-/** Devuelve el Set de userId actualmente conectados a la app. */
+/** Devuelve el Set de userId conectados y si el canal de Realtime está activo. */
 export function usePresence() {
-  const onlineUserIds = useContext(PresenceContext);
-  return { onlineUserIds };
+  return useContext(PresenceContext);
 }

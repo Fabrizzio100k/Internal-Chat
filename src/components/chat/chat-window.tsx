@@ -65,7 +65,7 @@ export function ChatWindow({
   const seenMessageIds = useRef(new Set(initialMessages.map((m) => m.id)));
   const shouldStickToBottom = useRef(true);
 
-  const { onlineUserIds } = usePresence();
+  const { onlineUserIds, isRealtimeConnected } = usePresence();
   const isOtherUserOnline = onlineUserIds.has(otherUser.id);
 
   // Marca la conversación como leída al abrirla. Esto se hace aquí (efecto
@@ -250,12 +250,18 @@ export function ChatWindow({
           <Avatar>
             <AvatarFallback>{otherUser.username.slice(0, 2).toUpperCase()}</AvatarFallback>
           </Avatar>
-          <PresenceDot online={isOtherUserOnline} className="absolute -right-0.5 -bottom-0.5" />
+          {isRealtimeConnected && (
+            <PresenceDot online={isOtherUserOnline} className="absolute -right-0.5 -bottom-0.5" />
+          )}
         </div>
         <div className="flex flex-col">
           <span className="text-sm font-medium">{otherUser.username}</span>
           <span className="text-xs text-muted-foreground">
-            {isOtherUserOnline ? "En línea" : "Desconectado"}
+            {isRealtimeConnected
+              ? isOtherUserOnline
+                ? "En línea"
+                : "Desconectado"
+              : "Estado no disponible"}
           </span>
         </div>
       </header>
