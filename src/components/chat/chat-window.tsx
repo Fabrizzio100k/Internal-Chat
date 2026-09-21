@@ -13,6 +13,7 @@ import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { sendMessageAction, listMessagesAction } from "@/lib/actions/messages";
 import { markConversationReadAction } from "@/lib/actions/chat";
 import { MessageAttachment } from "@/components/chat/message-attachment";
+import { MessageTimestamp } from "@/components/chat/message-timestamp";
 import { PresenceDot } from "@/components/chat/presence-dot";
 import { usePresence } from "@/hooks/use-presence";
 
@@ -262,7 +263,7 @@ export function ChatWindow({
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto"
+        className="flex-1 overflow-x-hidden overflow-y-auto"
       >
         <div className="flex flex-col gap-3 p-4">
           {isLoadingMore && (
@@ -288,7 +289,7 @@ export function ChatWindow({
                 >
                   <div
                     className={cn(
-                      "max-w-md rounded-2xl px-3.5 py-2 text-sm",
+                      "max-w-md rounded-2xl px-3.5 py-2 text-sm break-words whitespace-pre-wrap",
                       isOwn
                         ? "bg-primary text-primary-foreground"
                         : "bg-muted text-foreground",
@@ -300,12 +301,7 @@ export function ChatWindow({
                   {message.attachments.map((attachment) => (
                     <MessageAttachment key={attachment.id} attachment={attachment} />
                   ))}
-                  <span className="mt-1 text-[10px] text-muted-foreground">
-                    {new Date(message.createdAt).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </span>
+                  <MessageTimestamp date={message.createdAt} />
                 </motion.div>
               );
             })}

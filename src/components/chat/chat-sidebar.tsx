@@ -214,7 +214,7 @@ export function ChatSidebar({
             <Avatar>
               <AvatarFallback>{currentUser.username.slice(0, 2).toUpperCase()}</AvatarFallback>
             </Avatar>
-            <PresenceDot online className="absolute -right-0.5 -bottom-0.5" />
+            <PresenceDot online={onlineUserIds.has(currentUser.userId)} className="absolute -right-0.5 -bottom-0.5" />
           </div>
           <div className="flex flex-col">
             <span className="text-sm font-medium leading-tight">{currentUser.username}</span>
