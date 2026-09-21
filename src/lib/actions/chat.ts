@@ -4,6 +4,11 @@ import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/lib/types/chat";
+import { checkRateLimit } from "@/lib/rate-limit";
+
+// Spam de solicitudes de chat: máximo 10 solicitudes por hora por IP.
+const CHAT_REQUEST_RATE_LIMIT = 10;
+const CHAT_REQUEST_RATE_WINDOW_MS = 60 * 60 * 1000;
 
 async function requireSession() {
   const session = await getSession();
@@ -36,6 +41,18 @@ export async function searchUsersAction(query: string) {
 /** Envía una solicitud de chat a otro usuario. */
 export async function sendChatRequestAction(toUserId: string): Promise<ActionResult> {
   const session = await requireSession();
+
+  const rateLimit = await checkRateLimit(
+    "send-chat-request",
+    CHAT_REQUEST_RATE_LIMIT,
+    CHAT_REQUEST_RATE_WINDOW_MS,
+  );
+  if (!rateLimit.allowed) {
+    return {
+      success: false,
+      error: `Demasiadas solicitudes enviadas. Intenta de nuevo en ${Math.ceil(rateLimit.retryAfterSeconds / 60)} minuto(s).`,
+    };
+  }
 
   if (toUserId === session.userId) {
     return { success: false, error: "No puedes enviarte una solicitud a ti mismo" };

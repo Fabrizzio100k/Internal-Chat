@@ -5,13 +5,26 @@ import { prisma } from "@/lib/prisma";
 import { createSession, deleteSession } from "@/lib/auth";
 import { registerSchema, loginSchema } from "@/lib/validations/auth";
 import type { AuthActionResult } from "@/lib/types/auth";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 const BCRYPT_ROUNDS = 12;
+
+// Fuerza bruta: máximo 5 intentos cada 15 minutos por IP, para login y registro.
+const AUTH_RATE_LIMIT = 5;
+const AUTH_RATE_WINDOW_MS = 15 * 60 * 1000;
 
 export async function registerAction(
   _prevState: AuthActionResult | undefined,
   formData: FormData,
 ): Promise<AuthActionResult> {
+  const rateLimit = await checkRateLimit("register", AUTH_RATE_LIMIT, AUTH_RATE_WINDOW_MS);
+  if (!rateLimit.allowed) {
+    return {
+      success: false,
+      error: `Demasiados intentos. Intenta de nuevo en ${Math.ceil(rateLimit.retryAfterSeconds / 60)} minuto(s).`,
+    };
+  }
+
   const parsed = registerSchema.safeParse({
     username: formData.get("username"),
     password: formData.get("password"),
@@ -43,6 +56,14 @@ export async function loginAction(
   _prevState: AuthActionResult | undefined,
   formData: FormData,
 ): Promise<AuthActionResult> {
+  const rateLimit = await checkRateLimit("login", AUTH_RATE_LIMIT, AUTH_RATE_WINDOW_MS);
+  if (!rateLimit.allowed) {
+    return {
+      success: false,
+      error: `Demasiados intentos. Intenta de nuevo en ${Math.ceil(rateLimit.retryAfterSeconds / 60)} minuto(s).`,
+    };
+  }
+
   const parsed = loginSchema.safeParse({
     username: formData.get("username"),
     password: formData.get("password"),

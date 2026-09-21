@@ -106,3 +106,17 @@ model Attachment {
 
   @@map("attachments")
 }
+
+// Rate limiting basado en Postgres (sin Redis/infra adicional). Cada fila
+// representa el conteo de requests de una IP para un endpoint específico
+// dentro de la ventana de tiempo actual. `key` combina ip+endpoint para que
+// cada endpoint tenga su propio límite independiente por IP.
+model RateLimit {
+  key         String   @id
+  count       Int      @default(1)
+  windowStart DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([windowStart])
+  @@map("rate_limits")
+}

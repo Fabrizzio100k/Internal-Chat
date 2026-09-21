@@ -41,9 +41,23 @@ export function PresenceProvider({
       .on("presence", { event: "sync" }, syncOnlineUsers)
       .on("presence", { event: "join" }, syncOnlineUsers)
       .on("presence", { event: "leave" }, syncOnlineUsers)
-      .subscribe(async (status) => {
+      .subscribe(async (status, err) => {
         if (status === "SUBSCRIBED") {
-          await channel.track({ userId: currentUserId, onlineAt: new Date().toISOString() });
+          const trackResult = await channel.track({
+            userId: currentUserId,
+            onlineAt: new Date().toISOString(),
+          });
+          if (trackResult !== "ok") {
+            console.error("[presence] track() no devolvió 'ok':", trackResult);
+          }
+          return;
+        }
+
+        // CHANNEL_ERROR, TIMED_OUT o CLOSED: antes esto quedaba en silencio
+        // total. Lo logueamos para poder diagnosticar fallos de conexión
+        // en producción (proxies, latencia, RLS, etc.) desde la consola.
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          console.error(`[presence] Falló la conexión al canal (${status}):`, err);
         }
       });
 

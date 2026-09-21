@@ -5,11 +5,24 @@ import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { STORAGE_BUCKET, MAX_FILE_SIZE_BYTES } from "@/lib/storage";
+import { checkRateLimit } from "@/lib/rate-limit";
+
+// Spam de archivos: máximo 10 subidas por minuto por IP.
+const UPLOAD_RATE_LIMIT = 10;
+const UPLOAD_RATE_WINDOW_MS = 60 * 1000;
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
   if (!session) {
     return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+  }
+
+  const rateLimit = await checkRateLimit("upload", UPLOAD_RATE_LIMIT, UPLOAD_RATE_WINDOW_MS);
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      { error: `Demasiadas subidas. Espera ${rateLimit.retryAfterSeconds} segundos.` },
+      { status: 429 },
+    );
   }
 
   const formData = await request.formData();

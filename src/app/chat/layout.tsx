@@ -3,6 +3,8 @@ import { getSession } from "@/lib/auth";
 import { listConversationsAction, listPendingRequestsAction } from "@/lib/actions/chat";
 import { ChatSidebar } from "@/components/chat/chat-sidebar";
 import { PresenceProvider } from "@/hooks/use-presence";
+import { UnreadTotalProvider } from "@/hooks/use-unread-total";
+import { FaviconBadge } from "@/components/chat/favicon-badge";
 
 export default async function ChatLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
@@ -17,14 +19,17 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
 
   return (
     <PresenceProvider currentUserId={session.userId}>
-      <div className="flex h-screen overflow-hidden bg-background">
-        <ChatSidebar
-          currentUser={session}
-          initialConversations={conversations}
-          initialPendingRequests={pendingRequests}
-        />
-        <div className="flex flex-1 flex-col overflow-hidden">{children}</div>
-      </div>
+      <UnreadTotalProvider>
+        <FaviconBadge />
+        <div className="flex h-screen overflow-hidden bg-background">
+          <ChatSidebar
+            currentUser={session}
+            initialConversations={conversations}
+            initialPendingRequests={pendingRequests}
+          />
+          <div className="flex flex-1 flex-col overflow-hidden">{children}</div>
+        </div>
+      </UnreadTotalProvider>
     </PresenceProvider>
   );
 }

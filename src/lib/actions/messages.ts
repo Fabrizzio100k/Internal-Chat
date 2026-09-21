@@ -4,6 +4,11 @@ import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
 import { MESSAGES_PAGE_SIZE, type ListMessagesResult, type SendMessageResult } from "@/lib/types/messages";
+import { checkRateLimit } from "@/lib/rate-limit";
+
+// Spam de mensajes: máximo 20 mensajes por minuto por IP.
+const SEND_MESSAGE_RATE_LIMIT = 20;
+const SEND_MESSAGE_RATE_WINDOW_MS = 60 * 1000;
 
 async function requireSession() {
   const session = await getSession();
@@ -83,6 +88,18 @@ export async function sendMessageAction(
 ): Promise<SendMessageResult> {
   const session = await requireSession();
   await assertParticipant(conversationId, session.userId);
+
+  const rateLimit = await checkRateLimit(
+    "send-message",
+    SEND_MESSAGE_RATE_LIMIT,
+    SEND_MESSAGE_RATE_WINDOW_MS,
+  );
+  if (!rateLimit.allowed) {
+    return {
+      success: false,
+      error: `Estás enviando mensajes muy rápido. Espera ${rateLimit.retryAfterSeconds} segundos.`,
+    };
+  }
 
   const trimmed = content.trim();
   if (!trimmed) {

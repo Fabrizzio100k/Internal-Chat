@@ -22,6 +22,7 @@ import {
 import { logoutAction } from "@/lib/actions/auth";
 import { toast } from "sonner";
 import { usePresence } from "@/hooks/use-presence";
+import { useUnreadTotal } from "@/hooks/use-unread-total";
 import { PresenceDot } from "@/components/chat/presence-dot";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
@@ -59,8 +60,21 @@ export function ChatSidebar({
   const [isSearching, startSearchTransition] = useTransition();
   const [, startTransition] = useTransition();
   const { onlineUserIds } = usePresence();
+  const { setTotalUnread } = useUnreadTotal();
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestSearchQueryRef = useRef("");
+
+  // Reporta la suma total de no leídos al UnreadTotalProvider, consumido
+  // por FaviconBadge para pintar el badge en el ícono de la pestaña. Esto
+  // notifica a un sistema externo (Context/DOM), no muta el propio estado
+  // de este componente, por lo que es un uso válido de efecto.
+  useEffect(() => {
+    const total = conversations.reduce((sum, c) => {
+      const effective = c.id === activeConversationId ? 0 : c.unreadCount;
+      return sum + effective;
+    }, 0);
+    setTotalUnread(total);
+  }, [conversations, activeConversationId, setTotalUnread]);
 
   // Si la conversación activa cambia (el usuario la abrió), su contador
   // efectivo se calcula como 0 directamente en el render (ver `effectiveUnreadCount`
