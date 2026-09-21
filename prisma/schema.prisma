@@ -1,0 +1,108 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DB_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum ChatRequestStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  sentRequests     ChatRequest[] @relation("SentRequests")
+  receivedRequests ChatRequest[] @relation("ReceivedRequests")
+
+  participations ConversationParticipant[]
+
+  messages    Message[]
+  attachments Attachment[]
+
+  @@map("users")
+}
+
+model ChatRequest {
+  id         String            @id @default(cuid())
+  fromUser   User              @relation("SentRequests", fields: [fromUserId], references: [id])
+  fromUserId String
+  toUser     User              @relation("ReceivedRequests", fields: [toUserId], references: [id])
+  toUserId   String
+  status     ChatRequestStatus @default(PENDING)
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  @@unique([fromUserId, toUserId])
+  @@map("chat_requests")
+}
+
+model Conversation {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  participants ConversationParticipant[]
+  messages     Message[]
+
+  @@map("conversations")
+}
+
+// Relación muchos-a-muchos entre User y Conversation. Cada fila representa
+// la membresía de un usuario en una conversación, junto con su propio
+// lastReadAt (para calcular mensajes no leídos por usuario). Este diseño
+// es el estándar para apps de mensajería porque:
+// - Cada participante tiene su propio estado de lectura, sin condicionales
+//   "soy A o soy B" en el código.
+// - Escala directo a conversaciones grupales sin cambiar el esquema
+//   (agregar más filas ConversationParticipant a la misma Conversation).
+model ConversationParticipant {
+  id             String       @id @default(cuid())
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversationId String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId         String
+  lastReadAt     DateTime?
+  joinedAt       DateTime     @default(now())
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+  @@map("conversation_participants")
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  conversationId String
+  sender         User         @relation(fields: [senderId], references: [id])
+  senderId       String
+  content        String?
+  createdAt      DateTime     @default(now())
+
+  attachments Attachment[]
+
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+model Attachment {
+  id         String   @id @default(cuid())
+  message    Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  messageId  String
+  uploader   User     @relation(fields: [uploaderId], references: [id])
+  uploaderId String
+  fileName   String
+  fileType   String
+  fileSize   Int
+  storagePath String
+  createdAt  DateTime @default(now())
+
+  @@map("attachments")
+}
