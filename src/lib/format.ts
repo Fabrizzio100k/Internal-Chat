@@ -11,3 +11,15 @@ export function formatUnreadCount(count: number): string {
   if (count <= 0) return "";
   return count > 9 ? "9+" : String(count);
 }
+
+
+const URL_PATTERN = /https?:\/\/[^\s<>"]+/g;
+
+/** Extrae la primera URL http(s) encontrada en un texto, o null si no hay ninguna. */
+export function extractFirstUrl(text: string | null | undefined): string | null {
+  if (!text) return null;
+  const match = text.match(URL_PATTERN);
+  if (!match) return null;
+  // Recorta puntuación final común que suele quedar pegada a la URL en texto normal (. , ) etc.
+  return match[0].replace(/[.,;:!?)\]]+$/, "");
+}

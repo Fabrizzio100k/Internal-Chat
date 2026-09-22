@@ -13,6 +13,8 @@ export type MessageDTO = {
   senderId: string;
   content: string | null;
   createdAt: Date;
+  editedAt: Date | null;
+  deletedAt: Date | null;
   sender: { id: string; username: string };
   attachments: AttachmentDTO[];
 };
@@ -27,4 +29,14 @@ export type SendMessageResult = {
   success: boolean;
   error?: string;
   messageId?: string;
+};
+
+export type EditMessageResult = {
+  success: boolean;
+  error?: string;
+};
+
+export type DeleteMessageResult = {
+  success: boolean;
+  error?: string;
 };

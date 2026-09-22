@@ -3,19 +3,30 @@
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useDropzone } from "react-dropzone";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, Paperclip, Loader2 } from "lucide-react";
+import { Send, Paperclip, Loader2, Menu, X, Check } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { extractFirstUrl } from "@/lib/format";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import { sendMessageAction, listMessagesAction } from "@/lib/actions/messages";
+import {
+  sendMessageAction,
+  listMessagesAction,
+  editMessageAction,
+  deleteMessageAction,
+} from "@/lib/actions/messages";
 import { markConversationReadAction } from "@/lib/actions/chat";
 import { MessageAttachment } from "@/components/chat/message-attachment";
 import { MessageTimestamp } from "@/components/chat/message-timestamp";
 import { PresenceDot } from "@/components/chat/presence-dot";
+import { TypingIndicator } from "@/components/chat/typing-indicator";
+import { LinkPreviewCard } from "@/components/chat/link-preview-card";
+import { MessageContextMenu } from "@/components/chat/message-context-menu";
 import { usePresence } from "@/hooks/use-presence";
+import { useTypingStatus } from "@/hooks/use-typing";
+import { useSidebar } from "@/hooks/use-sidebar";
 
 type SessionUser = { userId: string; username: string };
 type OtherUser = { id: string; username: string };
@@ -33,6 +44,8 @@ type MessageData = {
   senderId: string;
   content: string | null;
   createdAt: string | Date;
+  editedAt?: string | Date | null;
+  deletedAt?: string | Date | null;
   sender: { id: string; username: string };
   attachments: AttachmentData[];
 };
@@ -59,6 +72,10 @@ export function ChatWindow({
   const [draft, setDraft] = useState("");
   const [isSending, startSendTransition] = useTransition();
   const [isUploading, setIsUploading] = useState(false);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  const [isSavingEdit, startEditTransition] = useTransition();
+  const [, startDeleteTransition] = useTransition();
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -67,6 +84,9 @@ export function ChatWindow({
 
   const { onlineUserIds, isRealtimeConnected } = usePresence();
   const isOtherUserOnline = onlineUserIds.has(otherUser.id);
+  const { toggle: toggleSidebar } = useSidebar();
+  const { typingUserIds, notifyTyping } = useTypingStatus(conversationId, currentUser.userId);
+  const isOtherUserTyping = typingUserIds.has(otherUser.id);
 
   // Marca la conversación como leída al abrirla. Esto se hace aquí (efecto
   // en el cliente, disparado después del render) y no en el Server Component
@@ -241,11 +261,74 @@ export function ChatWindow({
     noKeyboard: true,
   });
 
+  const handleCopyMessage = useCallback((content: string) => {
+    navigator.clipboard
+      .writeText(content)
+      .then(() => toast.success("Mensaje copiado"))
+      .catch(() => toast.error("No se pudo copiar el mensaje"));
+  }, []);
+
+  const handleStartEdit = useCallback((message: MessageData) => {
+    setEditingMessageId(message.id);
+    setEditDraft(message.content ?? "");
+  }, []);
+
+  const handleCancelEdit = useCallback(() => {
+    setEditingMessageId(null);
+    setEditDraft("");
+  }, []);
+
+  const handleSaveEdit = useCallback(() => {
+    const messageId = editingMessageId;
+    const content = editDraft.trim();
+    if (!messageId || !content) return;
+
+    startEditTransition(async () => {
+      const result = await editMessageAction(messageId, content);
+      if (!result.success) {
+        toast.error(result.error ?? "No se pudo editar el mensaje");
+        return;
+      }
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId ? { ...m, content, editedAt: new Date().toISOString() } : m,
+        ),
+      );
+      setEditingMessageId(null);
+      setEditDraft("");
+    });
+  }, [editingMessageId, editDraft]);
+
+  const handleDeleteMessage = useCallback((messageId: string) => {
+    startDeleteTransition(async () => {
+      const result = await deleteMessageAction(messageId);
+      if (!result.success) {
+        toast.error(result.error ?? "No se pudo eliminar el mensaje");
+        return;
+      }
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId ? { ...m, content: null, deletedAt: new Date().toISOString() } : m,
+        ),
+      );
+    });
+  }, []);
+
   return (
     <div {...getRootProps()} className="relative flex h-full flex-1 flex-col overflow-hidden">
       <input {...getInputProps()} />
 
       <header className="flex items-center gap-3 border-b px-4 py-3">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="md:hidden"
+          onClick={toggleSidebar}
+          aria-label="Abrir lista de conversaciones"
+        >
+          <Menu />
+        </Button>
         <div className="relative">
           <Avatar>
             <AvatarFallback>{otherUser.username.slice(0, 2).toUpperCase()}</AvatarFallback>
@@ -256,13 +339,20 @@ export function ChatWindow({
         </div>
         <div className="flex flex-col">
           <span className="text-sm font-medium">{otherUser.username}</span>
-          <span className="text-xs text-muted-foreground">
-            {isRealtimeConnected
-              ? isOtherUserOnline
-                ? "En línea"
-                : "Desconectado"
-              : "Estado no disponible"}
-          </span>
+          {isOtherUserTyping ? (
+            <span className="flex items-center gap-1.5 text-xs font-medium text-primary">
+              Escribiendo
+              <TypingIndicator />
+            </span>
+          ) : (
+            <span className="text-xs text-muted-foreground">
+              {isRealtimeConnected
+                ? isOtherUserOnline
+                  ? "En línea"
+                  : "Desconectado"
+                : "Estado no disponible"}
+            </span>
+          )}
         </div>
       </header>
 
@@ -285,6 +375,13 @@ export function ChatWindow({
           <AnimatePresence initial={false}>
             {messages.map((message) => {
               const isOwn = message.senderId === currentUser.userId;
+              const isDeleted = Boolean(message.deletedAt);
+              const isEditing = editingMessageId === message.id;
+              const previewUrl = !isDeleted ? extractFirstUrl(message.content) : null;
+              const canEdit = isOwn && !isDeleted && message.attachments.length === 0 && Boolean(message.content);
+              const canDelete = isOwn && !isDeleted;
+              const canCopy = !isDeleted && Boolean(message.content);
+
               return (
                 <motion.div
                   key={message.id}
@@ -293,17 +390,71 @@ export function ChatWindow({
                   transition={{ duration: 0.2, ease: "easeOut" }}
                   className={cn("flex flex-col", isOwn ? "items-end" : "items-start")}
                 >
-                  <div
-                    className={cn(
-                      "max-w-md rounded-2xl px-3.5 py-2 text-sm break-words whitespace-pre-wrap",
-                      isOwn
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted text-foreground",
-                      message.content ? "" : "bg-transparent p-0",
-                    )}
-                  >
-                    {message.content}
-                  </div>
+                  {isEditing ? (
+                    <div className="flex w-full max-w-md flex-col gap-1.5">
+                      <Textarea
+                        value={editDraft}
+                        onChange={(e) => setEditDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault();
+                            handleSaveEdit();
+                          }
+                          if (e.key === "Escape") {
+                            handleCancelEdit();
+                          }
+                        }}
+                        autoFocus
+                        className="min-h-16 resize-none text-sm"
+                      />
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          type="button"
+                          size="icon-sm"
+                          variant="ghost"
+                          onClick={handleCancelEdit}
+                          aria-label="Cancelar edición"
+                        >
+                          <X />
+                        </Button>
+                        <Button
+                          type="button"
+                          size="icon-sm"
+                          onClick={handleSaveEdit}
+                          disabled={isSavingEdit || !editDraft.trim()}
+                          aria-label="Guardar edición"
+                        >
+                          {isSavingEdit ? <Loader2 className="animate-spin" /> : <Check />}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <MessageContextMenu
+                      canCopy={canCopy}
+                      canEdit={canEdit}
+                      canDelete={canDelete}
+                      onCopy={() => message.content && handleCopyMessage(message.content)}
+                      onEdit={() => handleStartEdit(message)}
+                      onDelete={() => handleDeleteMessage(message.id)}
+                    >
+                      <div
+                        className={cn(
+                          "max-w-md rounded-2xl px-3.5 py-2 text-sm break-words whitespace-pre-wrap",
+                          isOwn
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-muted text-foreground",
+                          message.content || isDeleted ? "" : "bg-transparent p-0",
+                          isDeleted && "italic opacity-70",
+                        )}
+                      >
+                        {isDeleted ? "Mensaje eliminado" : message.content}
+                        {!isDeleted && message.editedAt && (
+                          <span className="ml-1.5 text-[10px] opacity-70">(editado)</span>
+                        )}
+                      </div>
+                    </MessageContextMenu>
+                  )}
+                  {previewUrl && <LinkPreviewCard url={previewUrl} />}
                   {message.attachments.map((attachment) => (
                     <MessageAttachment key={attachment.id} attachment={attachment} />
                   ))}
@@ -345,7 +496,10 @@ export function ChatWindow({
           </Button>
           <Textarea
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              if (e.target.value.trim()) notifyTyping();
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();

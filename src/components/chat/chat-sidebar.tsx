@@ -23,7 +23,11 @@ import { logoutAction } from "@/lib/actions/auth";
 import { toast } from "sonner";
 import { usePresence } from "@/hooks/use-presence";
 import { useUnreadTotal } from "@/hooks/use-unread-total";
+import { useSidebar } from "@/hooks/use-sidebar";
+import { useTypingStatusForConversations } from "@/hooks/use-typing";
 import { PresenceDot } from "@/components/chat/presence-dot";
+import { TypingIndicator } from "@/components/chat/typing-indicator";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type ConversationItem = {
@@ -61,6 +65,11 @@ export function ChatSidebar({
   const [, startTransition] = useTransition();
   const { onlineUserIds } = usePresence();
   const { setTotalUnread } = useUnreadTotal();
+  const { isOpen, close } = useSidebar();
+  const typingConversationIds = useTypingStatusForConversations(
+    conversations.map((c) => c.id),
+    currentUser.userId,
+  );
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestSearchQueryRef = useRef("");
 
@@ -207,7 +216,30 @@ export function ChatSidebar({
   };
 
   return (
-    <aside className="flex h-full w-80 flex-col border-r bg-muted/30">
+    <>
+      {/* Overlay oscuro detrás del drawer en mobile; hacer click lo cierra.
+          En desktop el sidebar es una columna fija y este overlay nunca se muestra
+          porque isOpen no se usa (el botón hamburguesa solo existe en mobile). */}
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={close}
+            className="fixed inset-0 z-40 bg-black/40 md:hidden"
+            aria-hidden="true"
+          />
+        )}
+      </AnimatePresence>
+
+      <aside
+        className={cn(
+          "fixed inset-y-0 left-0 z-50 flex h-full w-72 flex-col border-r bg-muted/30 transition-transform duration-200 ease-out",
+          "md:relative md:z-auto md:w-80 md:translate-x-0",
+          isOpen ? "translate-x-0" : "-translate-x-full",
+        )}
+      >
       <div className="flex items-center justify-between gap-2 p-4">
         <div className="flex items-center gap-2">
           <div className="relative">
@@ -221,20 +253,23 @@ export function ChatSidebar({
             <span className="text-xs text-muted-foreground">En línea</span>
           </div>
         </div>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => {
-            startTransition(async () => {
-              await logoutAction();
-              router.push("/login");
-              router.refresh();
-            });
-          }}
-          aria-label="Cerrar sesión"
-        >
-          <LogOut />
-        </Button>
+        <div className="flex items-center gap-1">
+          <ThemeToggle />
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => {
+              startTransition(async () => {
+                await logoutAction();
+                router.push("/login");
+                router.refresh();
+              });
+            }}
+            aria-label="Cerrar sesión"
+          >
+            <LogOut />
+          </Button>
+        </div>
       </div>
 
       <Separator />
@@ -326,10 +361,14 @@ export function ChatSidebar({
                 const isOnline = onlineUserIds.has(conversation.otherUser.id);
                 const effectiveUnreadCount = isActive ? 0 : conversation.unreadCount;
                 const unreadLabel = formatUnreadCount(effectiveUnreadCount);
+                const isTyping = typingConversationIds.has(conversation.id);
                 return (
                   <button
                     key={conversation.id}
-                    onClick={() => router.push(`/chat/${conversation.id}`)}
+                    onClick={() => {
+                      router.push(`/chat/${conversation.id}`);
+                      close();
+                    }}
                     className={cn(
                       "flex items-center gap-2.5 rounded-lg p-2 text-left transition-colors hover:bg-muted",
                       isActive && "bg-muted",
@@ -352,15 +391,22 @@ export function ChatSidebar({
                       >
                         {conversation.otherUser.username}
                       </span>
-                      <span
-                        className={cn(
-                          "truncate text-xs",
-                          unreadLabel ? "font-medium text-foreground" : "text-muted-foreground",
-                        )}
-                      >
-                        {conversation.lastMessage?.content ??
-                          (conversation.lastMessage ? "Archivo adjunto" : "Sin mensajes aún")}
-                      </span>
+                      {isTyping ? (
+                        <span className="flex items-center gap-1 text-xs font-medium text-primary">
+                          Escribiendo
+                          <TypingIndicator size="sm" />
+                        </span>
+                      ) : (
+                        <span
+                          className={cn(
+                            "truncate text-xs",
+                            unreadLabel ? "font-medium text-foreground" : "text-muted-foreground",
+                          )}
+                        >
+                          {conversation.lastMessage?.content ??
+                            (conversation.lastMessage ? "Archivo adjunto" : "Sin mensajes aún")}
+                        </span>
+                      )}
                     </div>
                     <AnimatePresence>
                       {unreadLabel && (
@@ -433,6 +479,7 @@ export function ChatSidebar({
           </ScrollArea>
         </TabsContent>
       </Tabs>
-    </aside>
+      </aside>
+    </>
   );
 }

@@ -3,7 +3,13 @@
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
-import { MESSAGES_PAGE_SIZE, type ListMessagesResult, type SendMessageResult } from "@/lib/types/messages";
+import {
+  MESSAGES_PAGE_SIZE,
+  type ListMessagesResult,
+  type SendMessageResult,
+  type EditMessageResult,
+  type DeleteMessageResult,
+} from "@/lib/types/messages";
 import { checkRateLimit } from "@/lib/rate-limit";
 
 // Spam de mensajes: máximo 20 mensajes por minuto por IP.
@@ -119,4 +125,73 @@ export async function sendMessageAction(
 
   revalidatePath(`/chat/${conversationId}`);
   return { success: true, messageId: message.id };
+}
+
+/**
+ * Edita el contenido de un mensaje propio. Solo el autor puede editarlo, y
+ * solo si no fue eliminado. Marca `editedAt` para que la UI pueda mostrar
+ * la etiqueta "(editado)". No se permite editar mensajes que son solo
+ * adjuntos (sin contenido de texto).
+ */
+export async function editMessageAction(
+  messageId: string,
+  content: string,
+): Promise<EditMessageResult> {
+  const session = await requireSession();
+
+  const message = await prisma.message.findUnique({
+    where: { id: messageId },
+    include: { attachments: { select: { id: true } } },
+  });
+  if (!message || message.deletedAt) {
+    return { success: false, error: "El mensaje no existe" };
+  }
+  if (message.senderId !== session.userId) {
+    return { success: false, error: "No puedes editar este mensaje" };
+  }
+  if (message.attachments.length > 0) {
+    return { success: false, error: "No se pueden editar mensajes con archivos adjuntos" };
+  }
+
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return { success: false, error: "El mensaje no puede estar vacío" };
+  }
+  if (trimmed.length > 4000) {
+    return { success: false, error: "El mensaje es demasiado largo" };
+  }
+
+  await prisma.message.update({
+    where: { id: messageId },
+    data: { content: trimmed, editedAt: new Date() },
+  });
+
+  revalidatePath(`/chat/${message.conversationId}`);
+  return { success: true };
+}
+
+/**
+ * Elimina (soft delete) un mensaje propio. Se conserva la fila en la base
+ * de datos con `deletedAt` marcado y el contenido limpiado, en vez de un
+ * DELETE físico, para que el otro participante vea el placeholder
+ * "Mensaje eliminado" tal como hacen apps de mensajería estándar.
+ */
+export async function deleteMessageAction(messageId: string): Promise<DeleteMessageResult> {
+  const session = await requireSession();
+
+  const message = await prisma.message.findUnique({ where: { id: messageId } });
+  if (!message || message.deletedAt) {
+    return { success: false, error: "El mensaje no existe" };
+  }
+  if (message.senderId !== session.userId) {
+    return { success: false, error: "No puedes eliminar este mensaje" };
+  }
+
+  await prisma.message.update({
+    where: { id: messageId },
+    data: { content: null, deletedAt: new Date() },
+  });
+
+  revalidatePath(`/chat/${message.conversationId}`);
+  return { success: true };
 }
