@@ -111,6 +111,14 @@ export function ChatWindow({
     }
   }, [messages, lastMessageSenderId, conversationId, currentUser.userId]);
 
+  // Al aparecer la burbuja de "escribiendo...", igual que con los mensajes,
+  // baja el scroll automáticamente solo si el usuario ya estaba viendo el fondo.
+  useEffect(() => {
+    if (isOtherUserTyping && shouldStickToBottom.current) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+  }, [isOtherUserTyping]);
+
   const handleScroll = useCallback(async () => {
     const container = scrollContainerRef.current;
     if (!container) return;
@@ -339,20 +347,13 @@ export function ChatWindow({
         </div>
         <div className="flex flex-col">
           <span className="text-sm font-medium">{otherUser.username}</span>
-          {isOtherUserTyping ? (
-            <span className="flex items-center gap-1.5 text-xs font-medium text-primary">
-              Escribiendo
-              <TypingIndicator />
-            </span>
-          ) : (
-            <span className="text-xs text-muted-foreground">
-              {isRealtimeConnected
-                ? isOtherUserOnline
-                  ? "En línea"
-                  : "Desconectado"
-                : "Estado no disponible"}
-            </span>
-          )}
+          <span className="text-xs text-muted-foreground">
+            {isRealtimeConnected
+              ? isOtherUserOnline
+                ? "En línea"
+                : "Desconectado"
+              : "Estado no disponible"}
+          </span>
         </div>
       </header>
 
@@ -462,6 +463,21 @@ export function ChatWindow({
                 </motion.div>
               );
             })}
+          </AnimatePresence>
+          <AnimatePresence>
+            {isOtherUserTyping && (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 8 }}
+                transition={{ duration: 0.15 }}
+                className="flex items-start"
+              >
+                <div className="flex items-center rounded-2xl bg-muted px-3.5 py-2.5">
+                  <TypingIndicator className="text-muted-foreground" />
+                </div>
+              </motion.div>
+            )}
           </AnimatePresence>
           <div ref={bottomRef} />
         </div>

@@ -235,8 +235,8 @@ export function ChatSidebar({
 
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-50 flex h-full w-72 flex-col border-r bg-muted/30 transition-transform duration-200 ease-out",
-          "md:relative md:z-auto md:w-80 md:translate-x-0",
+          "fixed inset-y-0 left-0 z-50 flex h-full w-72 flex-col border-r bg-background transition-transform duration-200 ease-out",
+          "md:relative md:z-auto md:w-80 md:translate-x-0 md:bg-muted/30",
           isOpen ? "translate-x-0" : "-translate-x-full",
         )}
       >
