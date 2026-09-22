@@ -111,7 +111,7 @@ export async function sendMessageAction(
   if (!trimmed) {
     return { success: false, error: "El mensaje no puede estar vacío" };
   }
-  if (trimmed.length > 4000) {
+  if (trimmed.length > 5000) {
     return { success: false, error: "El mensaje es demasiado largo" };
   }
 
@@ -157,7 +157,7 @@ export async function editMessageAction(
   if (!trimmed) {
     return { success: false, error: "El mensaje no puede estar vacío" };
   }
-  if (trimmed.length > 4000) {
+  if (trimmed.length > 5000) {
     return { success: false, error: "El mensaje es demasiado largo" };
   }
 

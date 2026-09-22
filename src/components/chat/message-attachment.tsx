@@ -4,8 +4,15 @@ import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Download, FileText, File as FileIcon, Loader2 } from "lucide-react";
+import { Download, FileText, File as FileIcon, Loader2, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { formatBytes } from "@/lib/format";
 
 type AttachmentData = {
@@ -25,14 +32,22 @@ function isPlainText(fileName: string, fileType: string) {
   return /\.txt$/i.test(fileName) || fileType === "text/plain";
 }
 
+function isImage(fileType: string) {
+  return fileType.startsWith("image/");
+}
+
 export function MessageAttachment({ attachment }: { attachment: AttachmentData }) {
-  const previewable =
-    (isMarkdown(attachment.fileName) || isPlainText(attachment.fileName, attachment.fileType)) &&
-    attachment.fileSize <= TEXT_PREVIEW_MAX_BYTES;
+  const isTextLike =
+    isMarkdown(attachment.fileName) || isPlainText(attachment.fileName, attachment.fileType);
+  const previewable = isTextLike && attachment.fileSize <= TEXT_PREVIEW_MAX_BYTES;
+  const canPreviewModal = previewable || isImage(attachment.fileType);
 
   const [textContent, setTextContent] = useState<string | null>(null);
   const [isLoadingPreview, setIsLoadingPreview] = useState(previewable);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [fileUrl, setFileUrl] = useState<string | null>(null);
+  const [isLoadingFileUrl, setIsLoadingFileUrl] = useState(false);
 
   useEffect(() => {
     if (!previewable) return;
@@ -75,6 +90,23 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
     }
   };
 
+  const handleOpenPreview = async () => {
+    setIsPreviewOpen(true);
+    if (isImage(attachment.fileType) && !fileUrl) {
+      setIsLoadingFileUrl(true);
+      try {
+        const res = await fetch(`/api/upload/${attachment.id}`);
+        if (!res.ok) throw new Error();
+        const { url } = await res.json();
+        setFileUrl(url);
+      } catch {
+        setFileUrl(null);
+      } finally {
+        setIsLoadingFileUrl(false);
+      }
+    }
+  };
+
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.97 }}
@@ -96,15 +128,27 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
             </span>
           </div>
         </div>
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          onClick={handleDownload}
-          disabled={isDownloading}
-          aria-label={`Descargar ${attachment.fileName}`}
-        >
-          {isDownloading ? <Loader2 className="animate-spin" /> : <Download />}
-        </Button>
+        <div className="flex items-center gap-0.5">
+          {canPreviewModal && (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={handleOpenPreview}
+              aria-label={`Vista previa de ${attachment.fileName}`}
+            >
+              <Eye />
+            </Button>
+          )}
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            onClick={handleDownload}
+            disabled={isDownloading}
+            aria-label={`Descargar ${attachment.fileName}`}
+          >
+            {isDownloading ? <Loader2 className="animate-spin" /> : <Download />}
+          </Button>
+        </div>
       </div>
 
       {previewable && (
@@ -126,6 +170,53 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
             </pre>
           )}
         </div>
+      )}
+
+      {canPreviewModal && (
+        <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle className="truncate">{attachment.fileName}</DialogTitle>
+              <DialogDescription>{formatBytes(attachment.fileSize)}</DialogDescription>
+            </DialogHeader>
+            <div className="max-h-[70vh] overflow-y-auto rounded-md border bg-muted/30 p-3">
+              {isImage(attachment.fileType) ? (
+                isLoadingFileUrl ? (
+                  <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
+                    <Loader2 className="size-4 animate-spin" />
+                    Cargando imagen...
+                  </div>
+                ) : fileUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={fileUrl}
+                    alt={attachment.fileName}
+                    className="mx-auto max-h-[60vh] w-auto rounded"
+                  />
+                ) : (
+                  <p className="text-sm text-muted-foreground">No se pudo cargar la imagen.</p>
+                )
+              ) : isLoadingPreview ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="size-4 animate-spin" />
+                  Cargando previsualización...
+                </div>
+              ) : textContent === null ? (
+                <p className="text-sm text-muted-foreground">
+                  No se pudo cargar la previsualización.
+                </p>
+              ) : isMarkdown(attachment.fileName) ? (
+                <div className="markdown-preview text-sm leading-relaxed">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{textContent}</ReactMarkdown>
+                </div>
+              ) : (
+                <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">
+                  {textContent}
+                </pre>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
       )}
     </motion.div>
   );

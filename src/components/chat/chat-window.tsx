@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useDropzone } from "react-dropzone";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, Paperclip, Loader2, Menu, X, Check } from "lucide-react";
+import { Send, Paperclip, Loader2, Menu, X, Check, UploadCloud } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -51,6 +51,7 @@ type MessageData = {
 };
 
 const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024;
+const MAX_MESSAGE_LENGTH = 5000;
 const SCROLL_TOP_THRESHOLD = 80; // px desde arriba para disparar "cargar más"
 
 export function ChatWindow({
@@ -199,9 +200,53 @@ export function ChatWindow({
     setMessages((prev) => [...prev, message]);
   }, []);
 
+  const uploadFile = useCallback(
+    async (file: File) => {
+      if (file.size > MAX_FILE_SIZE_BYTES) {
+        toast.error("El archivo supera el límite de 20MB");
+        return;
+      }
+      setIsUploading(true);
+      try {
+        const formData = new FormData();
+        formData.set("file", file);
+        formData.set("conversationId", conversationId);
+
+        const res = await fetch("/api/upload", { method: "POST", body: formData });
+        const data = await res.json();
+
+        if (!res.ok || !data.success) {
+          toast.error(data.error ?? "No se pudo subir el archivo");
+          return;
+        }
+
+        appendLocalMessage(data.message);
+        return true;
+      } catch {
+        toast.error("Error subiendo el archivo");
+        return false;
+      } finally {
+        setIsUploading(false);
+      }
+    },
+    [conversationId, appendLocalMessage],
+  );
+
   const handleSend = () => {
     const content = draft.trim();
     if (!content) return;
+
+    // Los mensajes muy largos se convierten automáticamente a un archivo .txt
+    // adjunto en vez de bloquear el envío, igual que hacen apps como Discord.
+    if (content.length > MAX_MESSAGE_LENGTH) {
+      setDraft("");
+      toast.info("Límite de caracteres superado. Se enviará como archivo .txt");
+      const file = new File([content], "mensaje.txt", { type: "text/plain" });
+      uploadFile(file).then((ok) => {
+        if (!ok) setDraft(content);
+      });
+      return;
+    }
 
     setDraft("");
     startSendTransition(async () => {
@@ -225,36 +270,6 @@ export function ChatWindow({
       }
     });
   };
-
-  const uploadFile = useCallback(
-    async (file: File) => {
-      if (file.size > MAX_FILE_SIZE_BYTES) {
-        toast.error("El archivo supera el límite de 20MB");
-        return;
-      }
-      setIsUploading(true);
-      try {
-        const formData = new FormData();
-        formData.set("file", file);
-        formData.set("conversationId", conversationId);
-
-        const res = await fetch("/api/upload", { method: "POST", body: formData });
-        const data = await res.json();
-
-        if (!res.ok || !data.success) {
-          toast.error(data.error ?? "No se pudo subir el archivo");
-          return;
-        }
-
-        appendLocalMessage(data.message);
-      } catch {
-        toast.error("Error subiendo el archivo");
-      } finally {
-        setIsUploading(false);
-      }
-    },
-    [conversationId, appendLocalMessage],
-  );
 
   const onDrop = useCallback(
     (acceptedFiles: File[]) => {
@@ -489,11 +504,30 @@ export function ChatWindow({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0 z-10 flex items-center justify-center bg-primary/10 backdrop-blur-sm"
+            transition={{ duration: 0.15 }}
+            className="absolute inset-0 z-10 flex items-center justify-center bg-primary/15 p-6 backdrop-blur-sm"
           >
-            <div className="rounded-xl border-2 border-dashed border-primary bg-background px-6 py-4 text-sm font-medium text-primary">
-              Suelta el archivo para enviarlo
-            </div>
+            <motion.div
+              initial={{ opacity: 0, scale: 0.92, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.92, y: 10 }}
+              transition={{ duration: 0.2, ease: "easeOut" }}
+              className="flex h-full w-full flex-col items-center justify-center gap-4 rounded-2xl border-4 border-dashed border-primary bg-background/80 px-8 py-10 text-center"
+            >
+              <motion.div
+                animate={{ y: [0, -8, 0] }}
+                transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut" }}
+                className="flex size-16 items-center justify-center rounded-full bg-primary/15 text-primary"
+              >
+                <UploadCloud className="size-8" />
+              </motion.div>
+              <div className="flex flex-col gap-1">
+                <p className="text-lg font-semibold text-primary">Suelta tu archivo aquí</p>
+                <p className="text-sm text-muted-foreground">
+                  Lo enviaremos directo a esta conversación
+                </p>
+              </div>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
