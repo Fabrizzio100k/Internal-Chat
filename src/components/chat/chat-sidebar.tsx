@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter, useParams } from "next/navigation";
+import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
-import { LogOut, Search, UserPlus, Check, X } from "lucide-react";
+import { LogOut, Search, UserPlus, Check, X, LayoutGrid } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,6 +21,7 @@ import {
   rejectChatRequestAction,
 } from "@/lib/actions/chat";
 import { logoutAction } from "@/lib/actions/auth";
+import { LAUNCHER_ROUTE } from "@/lib/app-routes";
 import { toast } from "sonner";
 import { usePresence } from "@/hooks/use-presence";
 import { useUnreadTotal } from "@/hooks/use-unread-total";
@@ -254,6 +256,16 @@ export function ChatSidebar({
           </div>
         </div>
         <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Volver a las apps"
+            // Se renderiza como <a> (Link): Base UI no debe asumir <button> nativo.
+            nativeButton={false}
+            render={<Link href={LAUNCHER_ROUTE} />}
+          >
+            <LayoutGrid />
+          </Button>
           <ThemeToggle />
           <Button
             variant="ghost"

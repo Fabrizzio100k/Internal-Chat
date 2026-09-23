@@ -2,9 +2,9 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { jwtVerify } from "jose";
 import { SESSION_COOKIE_NAME } from "@/lib/auth";
+import { LAUNCHER_ROUTE, PROTECTED_PREFIXES } from "@/lib/app-routes";
 import { checkEdgeRateLimit } from "@/lib/rate-limit-edge";
 
-const PROTECTED_PREFIXES = ["/chat"];
 const AUTH_PAGES = ["/login", "/register"];
 
 // Capa global de rate limiting: red de seguridad general contra abuso masivo
@@ -65,8 +65,8 @@ export async function proxy(request: NextRequest) {
   }
 
   if (isAuthPage && hasValidSession) {
-    const chatUrl = new URL("/chat", request.url);
-    return NextResponse.redirect(chatUrl);
+    const launcherUrl = new URL(LAUNCHER_ROUTE, request.url);
+    return NextResponse.redirect(launcherUrl);
   }
 
   return NextResponse.next();

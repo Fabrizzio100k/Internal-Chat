@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { getSession } from "@/lib/auth";
+import { parseHttpUrl } from "@/lib/net-guard";
+import { resolveHostClass } from "@/lib/net-guard.server";
 
 // Timeout corto: no queremos que un servidor remoto lento cuelgue la respuesta.
 const FETCH_TIMEOUT_MS = 5000;
@@ -13,33 +15,6 @@ type LinkPreviewData = {
   image: string | null;
   siteName: string | null;
 };
-
-/**
- * Bloquea URLs que apuntan a redes privadas/loopback/metadata de nube, para
- * evitar que este endpoint se use como proxy SSRF (p. ej. un mensaje con un
- * link a http://169.254.169.254/... o http://localhost:PUERTO_INTERNO).
- * No es un bloqueo perfecto (no resuelve DNS aquí), pero cubre los casos
- * directos más comunes de abuso.
- */
-function isBlockedHost(hostname: string): boolean {
-  const lower = hostname.toLowerCase();
-  if (lower === "localhost" || lower.endsWith(".localhost")) return true;
-  if (lower === "169.254.169.254") return true; // metadata de AWS/GCP/Azure
-
-  const ipv4Match = lower.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (ipv4Match) {
-    const [a, b] = ipv4Match.slice(1).map(Number);
-    if (a === 127) return true; // loopback
-    if (a === 10) return true; // privada
-    if (a === 172 && b >= 16 && b <= 31) return true; // privada
-    if (a === 192 && b === 168) return true; // privada
-    if (a === 0) return true;
-  }
-  if (lower === "::1" || lower.startsWith("fe80:") || lower.startsWith("fc00:") || lower.startsWith("fd00:")) {
-    return true; // loopback/link-local/ULA en IPv6
-  }
-  return false;
-}
 
 function extractMeta(html: string, property: string): string | null {
   const patterns = [
@@ -80,19 +55,19 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "url requerida" }, { status: 400 });
   }
 
-  let parsed: URL;
-  try {
-    parsed = new URL(targetUrl);
-  } catch {
-    return NextResponse.json({ error: "URL inválida" }, { status: 400 });
+  const target = parseHttpUrl(targetUrl);
+  if (!target.ok) {
+    return NextResponse.json({ error: target.error }, { status: 400 });
   }
 
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return NextResponse.json({ error: "Protocolo no soportado" }, { status: 400 });
-  }
-  if (isBlockedHost(parsed.hostname)) {
+  // Las previews solo se generan para internet pública: un link a la red
+  // interna convertiría este endpoint en un proxy SSRF.
+  const hostClass = await resolveHostClass(target.url.hostname);
+  if (hostClass !== "public") {
     return NextResponse.json({ error: "Host no permitido" }, { status: 400 });
   }
+
+  const parsed = target.url;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);

@@ -8,6 +8,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { loginSchema, type LoginInput } from "@/lib/validations/auth";
 import { loginAction } from "@/lib/actions/auth";
+import { LAUNCHER_ROUTE } from "@/lib/app-routes";
 import type { AuthActionResult } from "@/lib/types/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,7 +31,7 @@ export function LoginForm() {
 
   useEffect(() => {
     if (state.success) {
-      router.push("/chat");
+      router.push(LAUNCHER_ROUTE);
       router.refresh();
     }
   }, [state.success, router]);
