@@ -31,7 +31,11 @@ const PresenceContext = createContext<PresenceContextValue>({
  *
  * Si el WebSocket no puede conectar (firewall/proxy de red bloqueando
  * wss://, común en redes corporativas), reintenta con backoff exponencial
- * en vez de rendirse tras el primer fallo.
+ * en vez de rendirse tras el primer fallo. Un CLOSED disparado por nuestro
+ * propio removeChannel() (cleanup del efecto, remount en dev, cambio de
+ * currentUserId) no cuenta como fallo: se distingue con
+ * isClosingIntentionallyRef para no loguearlo ni disparar un reintento
+ * innecesario.
  */
 export function PresenceProvider({
   currentUserId,
@@ -46,12 +50,19 @@ export function PresenceProvider({
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryCountRef = useRef(0);
   const isUnmountedRef = useRef(false);
+  // true mientras estamos cerrando el canal a propósito (cleanup del efecto,
+  // remount de React en dev, cambio de currentUserId). removeChannel()
+  // dispara internamente el mismo evento CLOSED que un corte de red real, y
+  // sin esta bandera no había forma de distinguir "me desconecté yo" de
+  // "la red me desconectó" dentro del callback de subscribe().
+  const isClosingIntentionallyRef = useRef(false);
 
   useEffect(() => {
     isUnmountedRef.current = false;
     const supabase = createSupabaseBrowserClient();
 
     function connect() {
+      isClosingIntentionallyRef.current = false;
       const channel = supabase.channel(PRESENCE_CHANNEL_NAME, {
         config: { presence: { key: currentUserId } },
       });
@@ -81,6 +92,12 @@ export function PresenceProvider({
           }
 
           if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+            // Un CLOSED disparado por nuestro propio removeChannel() en el
+            // cleanup (desmontaje, remount de StrictMode/dev, o cambio de
+            // currentUserId) no es un fallo: es la consecuencia esperada de
+            // cerrar el canal a propósito. No lo logueamos ni reintentamos.
+            if (isClosingIntentionallyRef.current) return;
+
             // Frecuente en redes corporativas/con firewall que bloquean
             // WebSockets salientes: no es un bug de la app, es la red del
             // cliente. Reintentamos con backoff en vez de quedarnos colgados.
@@ -103,6 +120,7 @@ export function PresenceProvider({
 
     return () => {
       isUnmountedRef.current = true;
+      isClosingIntentionallyRef.current = true;
       if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
       if (channelRef.current) supabase.removeChannel(channelRef.current);
     };

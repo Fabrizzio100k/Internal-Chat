@@ -20,6 +20,8 @@ type LinkPreviewData = {
   siteName: string | null;
 };
 
+type LinkPreviewResponse = LinkPreviewData | { noPreview: true };
+
 /**
  * Previsualización tipo "card" para el primer link detectado en un mensaje.
  * Pide los metadatos Open Graph al propio backend (/api/link-preview) en vez
@@ -38,8 +40,15 @@ export function LinkPreviewCard({ url }: { url: string }) {
     async function load() {
       try {
         const res = await fetch(`/api/link-preview?url=${encodeURIComponent(url)}`);
+        // El endpoint responde 200 incluso cuando no hay preview disponible
+        // (host bloqueado, sitio remoto sin metadatos, etc.), así que un
+        // status no-OK aquí sí es un error real (ruta caída, no autenticado).
         if (!res.ok) throw new Error();
-        const json: LinkPreviewData = await res.json();
+        const json: LinkPreviewResponse = await res.json();
+        if ("noPreview" in json) {
+          if (!cancelled) setStatus("error");
+          return;
+        }
         if (!cancelled) {
           setData(json);
           setStatus("ready");

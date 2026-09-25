@@ -218,7 +218,7 @@ export function HombrePostApp() {
 
         <div className="relative flex min-h-0 flex-1">
           {/* Sidebar: fija en escritorio, drawer animado en móvil. */}
-          <aside className="hidden w-72 shrink-0 flex-col border-r lg:flex">{sidebar}</aside>
+          <aside className="hidden min-h-0 w-72 shrink-0 flex-col border-r lg:flex">{sidebar}</aside>
 
           <AnimatePresence>
             {isSidebarOpen ? (
@@ -238,7 +238,7 @@ export function HombrePostApp() {
                   animate={{ x: 0 }}
                   exit={{ x: "-100%" }}
                   transition={{ type: "spring", stiffness: 380, damping: 36 }}
-                  className="fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-col border-r bg-background lg:hidden"
+                  className="fixed inset-y-0 left-0 z-50 flex min-h-0 w-72 max-w-[85vw] flex-col border-r bg-background lg:hidden"
                 >
                   <div className="flex items-center justify-between border-b px-3 py-2">
                     <span className="text-sm font-medium">Workspace</span>

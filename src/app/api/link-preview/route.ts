@@ -55,16 +55,24 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "url requerida" }, { status: 400 });
   }
 
+  // A partir de aquí, cualquier motivo por el que no se pueda generar una
+  // preview (URL inválida, host bloqueado por el guard SSRF, respuesta no-OK
+  // del sitio remoto, contenido no-HTML, etc.) es un caso *esperado* y no un
+  // error del cliente: se responde 200 con noPreview=true en vez de 4xx/5xx,
+  // para que el navegador no lo marque como request fallida en la consola.
+  // LinkPreviewCard interpreta noPreview ocultando la card, igual que antes.
+  const noPreview = () => NextResponse.json({ noPreview: true }, { status: 200 });
+
   const target = parseHttpUrl(targetUrl);
   if (!target.ok) {
-    return NextResponse.json({ error: target.error }, { status: 400 });
+    return noPreview();
   }
 
   // Las previews solo se generan para internet pública: un link a la red
   // interna convertiría este endpoint en un proxy SSRF.
   const hostClass = await resolveHostClass(target.url.hostname);
   if (hostClass !== "public") {
-    return NextResponse.json({ error: "Host no permitido" }, { status: 400 });
+    return noPreview();
   }
 
   const parsed = target.url;
@@ -83,12 +91,12 @@ export async function GET(request: NextRequest) {
     });
 
     if (!res.ok) {
-      return NextResponse.json({ error: "No se pudo obtener la página" }, { status: 502 });
+      return noPreview();
     }
 
     const contentType = res.headers.get("content-type") ?? "";
     if (!contentType.includes("text/html")) {
-      return NextResponse.json({ error: "El contenido no es HTML" }, { status: 415 });
+      return noPreview();
     }
 
     // Lee como stream y corta al llegar al límite en vez de usar res.text()
@@ -120,7 +128,7 @@ export async function GET(request: NextRequest) {
       headers: { "Cache-Control": "private, max-age=3600" },
     });
   } catch {
-    return NextResponse.json({ error: "No se pudo obtener la previsualización" }, { status: 502 });
+    return noPreview();
   } finally {
     clearTimeout(timeout);
   }

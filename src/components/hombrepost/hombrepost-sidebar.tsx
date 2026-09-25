@@ -13,8 +13,10 @@ import {
   Trash2,
   Variable,
 } from "lucide-react";
+import { ScrollArea as ScrollAreaPrimitive } from "@base-ui/react/scroll-area";
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
+import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { KeyValueTable } from "@/components/hombrepost/key-value-table";
 import { PromptDialog } from "@/components/hombrepost/prompt-dialog";
@@ -84,28 +86,36 @@ export function HombrePostSidebar({
   return (
     <>
       <Tabs defaultValue="collections" className="min-h-0 flex-1 gap-0">
-        <TabsList
-          variant="line"
-          className="w-full max-w-full justify-start overflow-x-auto border-b px-2 py-1.5"
-        >
-          <TabsTrigger value="collections" className="px-2">
-            <Layers />
-            <span className="hidden sm:inline">Colecciones</span>
-          </TabsTrigger>
-          <TabsTrigger value="history" className="px-2">
-            <History />
-            <span className="hidden sm:inline">Historial</span>
-          </TabsTrigger>
-          <TabsTrigger value="env" className="px-2">
-            <Variable />
-            <span className="hidden sm:inline">Entorno</span>
-          </TabsTrigger>
-        </TabsList>
+        <ScrollAreaPrimitive.Root data-slot="scroll-area" className="relative w-full border-b">
+          <ScrollAreaPrimitive.Viewport
+            data-slot="scroll-area-viewport"
+            className="size-full rounded-[inherit] outline-none"
+          >
+            <TabsList
+              variant="line"
+              className="w-full max-w-full justify-start px-2 py-1.5"
+            >
+              <TabsTrigger value="collections" className="px-2">
+                <Layers />
+                <span className="hidden sm:inline">Colecciones</span>
+              </TabsTrigger>
+              <TabsTrigger value="history" className="px-2">
+                <History />
+                <span className="hidden sm:inline">Historial</span>
+              </TabsTrigger>
+              <TabsTrigger value="env" className="px-2">
+                <Variable />
+                <span className="hidden sm:inline">Entorno</span>
+              </TabsTrigger>
+            </TabsList>
+          </ScrollAreaPrimitive.Viewport>
+          <ScrollBar orientation="horizontal" />
+        </ScrollAreaPrimitive.Root>
 
         {/* Colecciones ------------------------------------------------ */}
-        <TabsContent value="collections" className="min-h-0 overflow-auto">
-          <div className="flex items-center justify-between gap-2 px-3 py-2">
-            <span className="text-xs text-muted-foreground">
+        <TabsContent value="collections" className="flex min-h-0 flex-col overflow-hidden">
+          <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+            <span className="text-xs font-medium text-muted-foreground">
               {collections.reduce((total, collection) => total + collection.requests.length, 0)}{" "}
               petición(es) guardada(s)
             </span>
@@ -119,25 +129,26 @@ export function HombrePostSidebar({
             </Button>
           </div>
 
-          <ul className="space-y-0.5 pb-3">
+          <ScrollArea className="min-h-0 flex-1">
+          <ul className="space-y-0.5 p-1.5">
             {collections.map((collection) => (
               <li key={collection.id}>
-                <div className="group/collection flex items-center gap-1 px-2">
+                <div className="group/collection flex items-center gap-1">
                   <button
                     type="button"
                     onClick={() => onToggleCollection(collection.id)}
-                    className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-1.5 text-left text-xs font-medium transition-colors hover:bg-muted/60"
+                    className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-1.5 text-left text-xs font-medium transition-colors hover:bg-muted/60"
                     aria-expanded={!collection.collapsed}
                   >
                     <motion.span
                       animate={{ rotate: collection.collapsed ? 0 : 90 }}
                       transition={{ duration: 0.15 }}
-                      className="flex shrink-0"
+                      className="flex shrink-0 text-muted-foreground"
                     >
                       <ChevronRight className="size-3.5" />
                     </motion.span>
                     <span className="truncate">{collection.name}</span>
-                    <span className="shrink-0 text-muted-foreground">
+                    <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[0.65rem] text-muted-foreground">
                       {collection.requests.length}
                     </span>
                   </button>
@@ -182,7 +193,7 @@ export function HombrePostSidebar({
                         </li>
                       ) : (
                         collection.requests.map((request) => (
-                          <li key={request.id} className="group/request flex items-center gap-1 pr-2 pl-5">
+                          <li key={request.id} className="group/request flex items-center gap-1 pr-1 pl-4">
                             <button
                               type="button"
                               onClick={() => onOpenRequest(collection.id, request.id)}
@@ -216,16 +227,32 @@ export function HombrePostSidebar({
               </li>
             ))}
           </ul>
+          </ScrollArea>
         </TabsContent>
 
         {/* Historial -------------------------------------------------- */}
-        <TabsContent value="history" className="min-h-0 overflow-auto">
+        <TabsContent value="history" className="flex min-h-0 flex-col overflow-hidden">
+          <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+            <span className="text-xs font-medium text-muted-foreground">
+              {history.length} petición(es) reciente(s)
+            </span>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Limpiar historial"
+              disabled={history.length === 0}
+              onClick={onClearHistory}
+            >
+              <Trash2 />
+            </Button>
+          </div>
+
           {history.length === 0 ? (
             <p className="p-4 text-xs text-muted-foreground">
               Aún no has enviado peticiones. Las últimas 40 quedan guardadas en este navegador.
             </p>
           ) : (
-            <>
+            <ScrollArea className="min-h-0 flex-1">
               <ul className="divide-y">
                 <AnimatePresence initial={false}>
                   {history.map((entry) => (
@@ -274,19 +301,13 @@ export function HombrePostSidebar({
                   ))}
                 </AnimatePresence>
               </ul>
-              <div className="p-3">
-                <Button variant="ghost" size="xs" onClick={onClearHistory}>
-                  <Trash2 />
-                  Limpiar historial
-                </Button>
-              </div>
-            </>
+            </ScrollArea>
           )}
         </TabsContent>
 
         {/* Entorno ---------------------------------------------------- */}
-        <TabsContent value="env" className="min-h-0 space-y-3 overflow-auto p-3">
-          <div className="flex items-center gap-1">
+        <TabsContent value="env" className="flex min-h-0 flex-col overflow-hidden">
+          <div className="flex items-center gap-1 border-b px-3 py-2">
             <NativeSelect
               className="min-w-0 flex-1 text-xs"
               aria-label="Entorno activo"
@@ -343,19 +364,23 @@ export function HombrePostSidebar({
             </Button>
           </div>
 
-          <p className="text-xs text-muted-foreground">
-            Usa <code className="font-mono">{"{{clave}}"}</code> en la URL, headers, body o auth. Los
-            extractores escriben aquí.
-          </p>
+          <ScrollArea className="min-h-0 flex-1">
+            <div className="space-y-3 p-3">
+              <p className="text-xs text-muted-foreground">
+                Usa <code className="font-mono">{"{{clave}}"}</code> en la URL, headers, body o auth.
+                Los extractores escriben aquí.
+              </p>
 
-          {activeEnvironment ? (
-            <KeyValueTable
-              rows={activeEnvironment.variables}
-              onChange={onEnvironmentVariablesChange}
-              keyPlaceholder="baseUrl"
-              valuePlaceholder="http://localhost:3000"
-            />
-          ) : null}
+              {activeEnvironment ? (
+                <KeyValueTable
+                  rows={activeEnvironment.variables}
+                  onChange={onEnvironmentVariablesChange}
+                  keyPlaceholder="baseUrl"
+                  valuePlaceholder="http://localhost:3000"
+                />
+              ) : null}
+            </div>
+          </ScrollArea>
         </TabsContent>
       </Tabs>
 

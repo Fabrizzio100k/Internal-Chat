@@ -167,6 +167,14 @@ export async function listPendingRequestsAction() {
  * Lista las conversaciones del usuario actual, con el último mensaje y el
  * conteo de mensajes no leídos (mensajes de la conversación creados después
  * de mi lastReadAt y que no envié yo mismo).
+ *
+ * El conteo de no leídos se resuelve con una sola query SQL agregada (en vez
+ * de un `message.count` por conversación dentro de un Promise.all, que era
+ * un round-trip a la base de datos por cada conversación del usuario). No se
+ * puede hacer con `prisma.message.groupBy` porque el filtro de fecha
+ * (`createdAt > lastReadAt`) es distinto para cada conversación —cada
+ * participación tiene su propio `lastReadAt`— y groupBy no soporta comparar
+ * contra un valor por-fila, solo contra constantes.
  */
 export async function listConversationsAction() {
   const session = await requireSession();
@@ -189,29 +197,39 @@ export async function listConversationsAction() {
     orderBy: { conversation: { createdAt: "desc" } },
   });
 
-  const results = await Promise.all(
-    myParticipations.map(async (participation) => {
-      const { conversation } = participation;
-      const otherParticipant = conversation.participants.find((p) => p.userId !== session.userId);
+  if (myParticipations.length === 0) {
+    return [];
+  }
 
-      const unreadCount = await prisma.message.count({
-        where: {
-          conversationId: conversation.id,
-          senderId: { not: session.userId },
-          ...(participation.lastReadAt ? { createdAt: { gt: participation.lastReadAt } } : {}),
-        },
-      });
+  const conversationIds = myParticipations.map((p) => p.conversationId);
 
-      return {
-        id: conversation.id,
-        otherUser: otherParticipant?.user ?? { id: "", username: "Usuario" },
-        lastMessage: conversation.messages[0] ?? null,
-        unreadCount,
-      };
-    }),
+  const unreadCounts = await prisma.$queryRaw<{ conversationId: string; unreadCount: bigint }[]>`
+    SELECT m."conversationId" AS "conversationId", COUNT(*) AS "unreadCount"
+    FROM messages m
+    INNER JOIN conversation_participants cp
+      ON cp."conversationId" = m."conversationId"
+      AND cp."userId" = ${session.userId}
+    WHERE m."conversationId" = ANY(${conversationIds})
+      AND m."senderId" != ${session.userId}
+      AND (cp."lastReadAt" IS NULL OR m."createdAt" > cp."lastReadAt")
+    GROUP BY m."conversationId"
+  `;
+
+  const unreadCountByConversationId = new Map(
+    unreadCounts.map((row) => [row.conversationId, Number(row.unreadCount)]),
   );
 
-  return results;
+  return myParticipations.map((participation) => {
+    const { conversation } = participation;
+    const otherParticipant = conversation.participants.find((p) => p.userId !== session.userId);
+
+    return {
+      id: conversation.id,
+      otherUser: otherParticipant?.user ?? { id: "", username: "Usuario" },
+      lastMessage: conversation.messages[0] ?? null,
+      unreadCount: unreadCountByConversationId.get(conversation.id) ?? 0,
+    };
+  });
 }
 
 /**

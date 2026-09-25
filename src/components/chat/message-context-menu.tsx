@@ -39,7 +39,7 @@ export function MessageContextMenu({
        * abrir el menú contextual puede confundirse con selección de texto.
        * En desktop no lo aplicamos para no romper el drag-select del mouse.
        */}
-      <ContextMenuPrimitive.Trigger className="touch-manipulation max-md:select-none">
+      <ContextMenuPrimitive.Trigger className="min-w-0 touch-manipulation max-md:select-none">
         {children}
       </ContextMenuPrimitive.Trigger>
       <ContextMenuPrimitive.Portal>

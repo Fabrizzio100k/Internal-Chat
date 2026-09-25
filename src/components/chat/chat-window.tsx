@@ -208,19 +208,58 @@ export function ChatWindow({
       }
       setIsUploading(true);
       try {
-        const formData = new FormData();
-        formData.set("file", file);
-        formData.set("conversationId", conversationId);
+        // 1. Pide una URL firmada de subida: el servidor valida pertenencia
+        //    a la conversación y el tamaño declarado, pero no ve el archivo.
+        const presignRes = await fetch("/api/upload/presign", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            conversationId,
+            fileName: file.name,
+            fileType: file.type || "application/octet-stream",
+            fileSize: file.size,
+          }),
+        });
+        const presignData = await presignRes.json();
+        if (!presignRes.ok) {
+          toast.error(presignData.error ?? "No se pudo iniciar la subida");
+          return false;
+        }
+        const { uploadUrl, storagePath } = presignData;
 
-        const res = await fetch("/api/upload", { method: "POST", body: formData });
-        const data = await res.json();
-
-        if (!res.ok || !data.success) {
-          toast.error(data.error ?? "No se pudo subir el archivo");
-          return;
+        // 2. Sube el archivo directo a S3 desde el navegador, sin pasar por
+        //    el servidor de la app (evita el límite de tamaño de body de
+        //    las funciones serverless y no duplica el archivo en memoria).
+        const uploadRes = await fetch(uploadUrl, {
+          method: "PUT",
+          headers: { "Content-Type": file.type || "application/octet-stream" },
+          body: file,
+        });
+        if (!uploadRes.ok) {
+          toast.error("No se pudo subir el archivo");
+          return false;
         }
 
-        appendLocalMessage(data.message);
+        // 3. Confirma la subida: el servidor verifica con S3 que el objeto
+        //    existe y recién ahí crea el mensaje con su adjunto en la DB.
+        const confirmRes = await fetch("/api/upload/confirm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            conversationId,
+            storagePath,
+            fileName: file.name,
+            fileType: file.type || "application/octet-stream",
+            fileSize: file.size,
+          }),
+        });
+        const confirmData = await confirmRes.json();
+        if (!confirmRes.ok || !confirmData.success) {
+          toast.error(confirmData.error ?? "No se pudo confirmar la subida");
+          return false;
+        }
+
+        appendLocalMessage(confirmData.message);
         return true;
       } catch {
         toast.error("Error subiendo el archivo");
@@ -377,7 +416,7 @@ export function ChatWindow({
         onScroll={handleScroll}
         className="flex-1 overflow-x-hidden overflow-y-auto"
       >
-        <div className="flex flex-col gap-3 p-4">
+        <div className="flex min-w-0 flex-col gap-3 p-4">
           {isLoadingMore && (
             <div className="flex justify-center py-1">
               <Loader2 className="size-4 animate-spin text-muted-foreground" />
@@ -404,10 +443,13 @@ export function ChatWindow({
                   initial={{ opacity: 0, y: 12 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.2, ease: "easeOut" }}
-                  className={cn("flex flex-col", isOwn ? "items-end" : "items-start")}
+                  className={cn(
+                    "flex w-full min-w-0 flex-col",
+                    isOwn ? "items-end" : "items-start",
+                  )}
                 >
                   {isEditing ? (
-                    <div className="flex w-full max-w-md flex-col gap-1.5">
+                    <div className="flex w-full max-w-[85%] min-w-0 flex-col gap-1.5 sm:max-w-md">
                       <Textarea
                         value={editDraft}
                         onChange={(e) => setEditDraft(e.target.value)}
@@ -455,7 +497,7 @@ export function ChatWindow({
                     >
                       <div
                         className={cn(
-                          "max-w-md rounded-2xl px-3.5 py-2 text-sm break-words whitespace-pre-wrap",
+                          "max-w-[85%] min-w-0 rounded-2xl px-3.5 py-2 text-sm wrap-anywhere whitespace-pre-wrap sm:max-w-md",
                           isOwn
                             ? "bg-primary text-primary-foreground"
                             : "bg-muted text-foreground",

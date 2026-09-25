@@ -2,10 +2,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { STORAGE_BUCKET } from "@/lib/storage";
-
-const SIGNED_URL_EXPIRY_SECONDS = 60 * 5; // 5 minutos
+import { getSignedDownloadUrl } from "@/lib/storage";
 
 export async function GET(
   request: NextRequest,
@@ -39,17 +36,15 @@ export async function GET(
     return NextResponse.json({ error: "No tienes acceso a este archivo" }, { status: 403 });
   }
 
-  const supabase = createSupabaseServiceClient();
-  const { data, error } = await supabase.storage
-    .from(STORAGE_BUCKET)
-    .createSignedUrl(attachment.storagePath, SIGNED_URL_EXPIRY_SECONDS);
-
-  if (error || !data) {
+  let url: string;
+  try {
+    url = await getSignedDownloadUrl(attachment.storagePath);
+  } catch {
     return NextResponse.json({ error: "Error generando la URL de descarga" }, { status: 500 });
   }
 
   return NextResponse.json({
-    url: data.signedUrl,
+    url,
     fileName: attachment.fileName,
     fileType: attachment.fileType,
   });

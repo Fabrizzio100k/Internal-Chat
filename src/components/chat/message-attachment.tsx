@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Download, FileText, File as FileIcon, Loader2, Eye } from "lucide-react";
+import { Download, FileText, File as FileIcon, Loader2, Eye, Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -40,14 +40,18 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
   const isTextLike =
     isMarkdown(attachment.fileName) || isPlainText(attachment.fileName, attachment.fileType);
   const previewable = isTextLike && attachment.fileSize <= TEXT_PREVIEW_MAX_BYTES;
-  const canPreviewModal = previewable || isImage(attachment.fileType);
+  const isImageAttachment = isImage(attachment.fileType);
+  const canPreviewModal = previewable || isImageAttachment;
 
   const [textContent, setTextContent] = useState<string | null>(null);
   const [isLoadingPreview, setIsLoadingPreview] = useState(previewable);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isCopying, setIsCopying] = useState(false);
+  const [justCopied, setJustCopied] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [fileUrl, setFileUrl] = useState<string | null>(null);
-  const [isLoadingFileUrl, setIsLoadingFileUrl] = useState(false);
+  const [isLoadingFileUrl, setIsLoadingFileUrl] = useState(isImageAttachment);
+  const [thumbnailFailed, setThumbnailFailed] = useState(false);
 
   useEffect(() => {
     if (!previewable) return;
@@ -75,6 +79,32 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
     };
   }, [attachment.id, previewable]);
 
+  // Las imágenes se previsualizan por defecto como miniatura dentro de la
+  // burbuja, sin esperar a que el usuario abra el modal.
+  useEffect(() => {
+    if (!isImageAttachment) return;
+
+    let cancelled = false;
+
+    async function loadThumbnail() {
+      try {
+        const res = await fetch(`/api/upload/${attachment.id}`);
+        if (!res.ok) throw new Error("No se pudo obtener la URL del archivo");
+        const { url } = await res.json();
+        if (!cancelled) setFileUrl(url);
+      } catch {
+        if (!cancelled) setThumbnailFailed(true);
+      } finally {
+        if (!cancelled) setIsLoadingFileUrl(false);
+      }
+    }
+
+    loadThumbnail();
+    return () => {
+      cancelled = true;
+    };
+  }, [attachment.id, isImageAttachment]);
+
   const handleDownload = async () => {
     setIsDownloading(true);
     try {
@@ -90,20 +120,26 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
     }
   };
 
-  const handleOpenPreview = async () => {
+  const handleOpenPreview = () => {
     setIsPreviewOpen(true);
-    if (isImage(attachment.fileType) && !fileUrl) {
-      setIsLoadingFileUrl(true);
-      try {
+  };
+
+  const handleCopyText = async () => {
+    setIsCopying(true);
+    try {
+      let text = textContent;
+      if (text === null) {
         const res = await fetch(`/api/upload/${attachment.id}`);
         if (!res.ok) throw new Error();
         const { url } = await res.json();
-        setFileUrl(url);
-      } catch {
-        setFileUrl(null);
-      } finally {
-        setIsLoadingFileUrl(false);
+        const fileRes = await fetch(url);
+        text = await fileRes.text();
       }
+      await navigator.clipboard.writeText(text ?? "");
+      setJustCopied(true);
+      setTimeout(() => setJustCopied(false), 1500);
+    } finally {
+      setIsCopying(false);
     }
   };
 
@@ -139,6 +175,23 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
               <Eye />
             </Button>
           )}
+          {isTextLike && (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={handleCopyText}
+              disabled={isCopying}
+              aria-label={`Copiar contenido de ${attachment.fileName}`}
+            >
+              {isCopying ? (
+                <Loader2 className="animate-spin" />
+              ) : justCopied ? (
+                <Check />
+              ) : (
+                <Copy />
+              )}
+            </Button>
+          )}
           <Button
             size="icon-sm"
             variant="ghost"
@@ -150,6 +203,37 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
           </Button>
         </div>
       </div>
+
+      {isImageAttachment && (
+        <div className="border-t bg-muted/20">
+          <button
+            type="button"
+            onClick={handleOpenPreview}
+            aria-label={`Ver imagen completa de ${attachment.fileName}`}
+            className="block w-full"
+          >
+            {isLoadingFileUrl ? (
+              <div className="flex items-center justify-center gap-2 py-8 text-xs text-muted-foreground">
+                <Loader2 className="size-3.5 animate-spin" />
+                Cargando imagen...
+              </div>
+            ) : fileUrl && !thumbnailFailed ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={fileUrl}
+                alt={attachment.fileName}
+                onError={() => setThumbnailFailed(true)}
+                className="max-h-64 w-full object-cover"
+                loading="lazy"
+              />
+            ) : (
+              <p className="py-6 text-center text-xs text-muted-foreground">
+                No se pudo cargar la imagen.
+              </p>
+            )}
+          </button>
+        </div>
+      )}
 
       {previewable && (
         <div className="max-h-64 overflow-y-auto px-3 py-2 text-xs">
@@ -176,8 +260,29 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
         <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>
           <DialogContent className="sm:max-w-lg">
             <DialogHeader>
-              <DialogTitle className="truncate">{attachment.fileName}</DialogTitle>
-              <DialogDescription>{formatBytes(attachment.fileSize)}</DialogDescription>
+              <div className="flex items-center justify-between gap-2 pr-6">
+                <div className="flex min-w-0 flex-col gap-0.5">
+                  <DialogTitle className="truncate">{attachment.fileName}</DialogTitle>
+                  <DialogDescription>{formatBytes(attachment.fileSize)}</DialogDescription>
+                </div>
+                {isTextLike && (
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    onClick={handleCopyText}
+                    disabled={isCopying}
+                    aria-label={`Copiar contenido de ${attachment.fileName}`}
+                  >
+                    {isCopying ? (
+                      <Loader2 className="animate-spin" />
+                    ) : justCopied ? (
+                      <Check />
+                    ) : (
+                      <Copy />
+                    )}
+                  </Button>
+                )}
+              </div>
             </DialogHeader>
             <div className="max-h-[70vh] overflow-y-auto rounded-md border bg-muted/30 p-3">
               {isImage(attachment.fileType) ? (
