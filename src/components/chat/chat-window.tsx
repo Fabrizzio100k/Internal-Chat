@@ -19,6 +19,12 @@ import {
 } from "@/lib/actions/messages";
 import { markConversationReadAction } from "@/lib/actions/chat";
 import { MessageAttachment } from "@/components/chat/message-attachment";
+import { MessageContent } from "@/components/chat/message-content";
+import {
+  AttachmentComposer,
+  createPendingAttachment,
+  type PendingAttachment,
+} from "@/components/chat/attachment-composer";
 import { MessageTimestamp } from "@/components/chat/message-timestamp";
 import { PresenceDot } from "@/components/chat/presence-dot";
 import { TypingIndicator } from "@/components/chat/typing-indicator";
@@ -52,6 +58,7 @@ type MessageData = {
 
 const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024;
 const MAX_MESSAGE_LENGTH = 5000;
+const MAX_ATTACHMENTS = 10;
 const SCROLL_TOP_THRESHOLD = 80; // px desde arriba para disparar "cargar más"
 
 export function ChatWindow({
@@ -71,6 +78,7 @@ export function ChatWindow({
   const [hasMore, setHasMore] = useState(initialHasMore);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [draft, setDraft] = useState("");
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [isSending, startSendTransition] = useTransition();
   const [isUploading, setIsUploading] = useState(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
@@ -176,15 +184,26 @@ export function ChatWindow({
         async (payload) => {
           const newMessageId = payload.new.id as string;
           if (seenMessageIds.current.has(newMessageId)) return;
+          // Marca como visto ANTES del await para cerrar la ventana de carrera:
+          // si el mensaje también se inserta localmente (envío propio) mientras
+          // esperamos el fetch, no lo insertaremos dos veces.
+          seenMessageIds.current.add(newMessageId);
 
           // El evento de Postgres no trae las relaciones (sender/attachments),
           // así que pedimos el mensaje completo vía la action existente.
           const res = await fetch(`/api/messages/${newMessageId}`);
-          if (!res.ok) return;
+          if (!res.ok) {
+            // Si falló, permite reintentar en un evento futuro.
+            seenMessageIds.current.delete(newMessageId);
+            return;
+          }
           const message: MessageData = await res.json();
 
-          seenMessageIds.current.add(message.id);
-          setMessages((prev) => [...prev, message]);
+          // Defensa extra: deduplica dentro del propio setMessages por si el
+          // mensaje ya está en la lista (p. ej. insertado localmente).
+          setMessages((prev) =>
+            prev.some((m) => m.id === message.id) ? prev : [...prev, message],
+          );
         },
       )
       .subscribe();
@@ -197,96 +216,179 @@ export function ChatWindow({
   const appendLocalMessage = useCallback((message: MessageData) => {
     seenMessageIds.current.add(message.id);
     shouldStickToBottom.current = true;
-    setMessages((prev) => [...prev, message]);
+    setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]));
   }, []);
 
-  const uploadFile = useCallback(
-    async (file: File) => {
-      if (file.size > MAX_FILE_SIZE_BYTES) {
-        toast.error("El archivo supera el límite de 20MB");
-        return;
+  // Encola archivos como adjuntos pendientes (no los sube todavía). El usuario
+  // los revisa/edita y luego pulsa enviar, como en Discord/WhatsApp.
+  const enqueueFiles = useCallback((files: File[]) => {
+    if (files.length === 0) return;
+    setPendingAttachments((prev) => {
+      const room = MAX_ATTACHMENTS - prev.length;
+      if (room <= 0) {
+        toast.error(`Máximo ${MAX_ATTACHMENTS} adjuntos por mensaje`);
+        return prev;
       }
+      const accepted: PendingAttachment[] = [];
+      for (const file of files) {
+        if (accepted.length >= room) {
+          toast.error(`Máximo ${MAX_ATTACHMENTS} adjuntos por mensaje`);
+          break;
+        }
+        if (file.size > MAX_FILE_SIZE_BYTES) {
+          toast.error(`"${file.name}" supera el límite de 20MB`);
+          continue;
+        }
+        accepted.push(createPendingAttachment(file));
+      }
+      return [...prev, ...accepted];
+    });
+  }, []);
+
+  const removePending = useCallback((id: string) => {
+    setPendingAttachments((prev) => {
+      const target = prev.find((p) => p.id === id);
+      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter((p) => p.id !== id);
+    });
+  }, []);
+
+  const replacePending = useCallback((id: string, file: File) => {
+    setPendingAttachments((prev) =>
+      prev.map((p) => {
+        if (p.id !== id) return p;
+        if (p.previewUrl) URL.revokeObjectURL(p.previewUrl);
+        return createPendingAttachment(file);
+      }),
+    );
+  }, []);
+
+  // Sube un único archivo a S3 vía URL firmada y devuelve sus metadatos de
+  // storage, o null si algo falló. No crea ningún mensaje (eso se hace después
+  // en un solo confirm con todos los adjuntos).
+  const presignAndPut = useCallback(
+    async (file: File): Promise<{ storagePath: string } | null> => {
+      const presignRes = await fetch("/api/upload/presign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversationId,
+          fileName: file.name,
+          fileType: file.type || "application/octet-stream",
+          fileSize: file.size,
+        }),
+      });
+      const presignData = await presignRes.json();
+      if (!presignRes.ok) {
+        toast.error(presignData.error ?? `No se pudo subir "${file.name}"`);
+        return null;
+      }
+      const { uploadUrl, storagePath } = presignData;
+
+      const uploadRes = await fetch(uploadUrl, {
+        method: "PUT",
+        headers: { "Content-Type": file.type || "application/octet-stream" },
+        body: file,
+      });
+      if (!uploadRes.ok) {
+        toast.error(`No se pudo subir "${file.name}"`);
+        return null;
+      }
+      return { storagePath };
+    },
+    [conversationId],
+  );
+
+  // Sube todos los adjuntos pendientes y crea UN mensaje con ellos (+ texto).
+  const sendWithAttachments = useCallback(
+    async (content: string, items: PendingAttachment[]): Promise<boolean> => {
       setIsUploading(true);
       try {
-        // 1. Pide una URL firmada de subida: el servidor valida pertenencia
-        //    a la conversación y el tamaño declarado, pero no ve el archivo.
-        const presignRes = await fetch("/api/upload/presign", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            conversationId,
-            fileName: file.name,
-            fileType: file.type || "application/octet-stream",
-            fileSize: file.size,
+        const uploaded = await Promise.all(
+          items.map(async (item) => {
+            const result = await presignAndPut(item.file);
+            if (!result) return null;
+            return {
+              storagePath: result.storagePath,
+              fileName: item.file.name,
+              fileType: item.file.type || "application/octet-stream",
+              fileSize: item.file.size,
+            };
           }),
-        });
-        const presignData = await presignRes.json();
-        if (!presignRes.ok) {
-          toast.error(presignData.error ?? "No se pudo iniciar la subida");
-          return false;
-        }
-        const { uploadUrl, storagePath } = presignData;
+        );
 
-        // 2. Sube el archivo directo a S3 desde el navegador, sin pasar por
-        //    el servidor de la app (evita el límite de tamaño de body de
-        //    las funciones serverless y no duplica el archivo en memoria).
-        const uploadRes = await fetch(uploadUrl, {
-          method: "PUT",
-          headers: { "Content-Type": file.type || "application/octet-stream" },
-          body: file,
-        });
-        if (!uploadRes.ok) {
-          toast.error("No se pudo subir el archivo");
-          return false;
-        }
+        if (uploaded.some((u) => u === null)) return false;
 
-        // 3. Confirma la subida: el servidor verifica con S3 que el objeto
-        //    existe y recién ahí crea el mensaje con su adjunto en la DB.
         const confirmRes = await fetch("/api/upload/confirm", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             conversationId,
-            storagePath,
-            fileName: file.name,
-            fileType: file.type || "application/octet-stream",
-            fileSize: file.size,
+            content: content || undefined,
+            attachments: uploaded,
           }),
         });
         const confirmData = await confirmRes.json();
         if (!confirmRes.ok || !confirmData.success) {
-          toast.error(confirmData.error ?? "No se pudo confirmar la subida");
+          toast.error(confirmData.error ?? "No se pudo enviar los adjuntos");
           return false;
         }
 
         appendLocalMessage(confirmData.message);
         return true;
       } catch {
-        toast.error("Error subiendo el archivo");
+        toast.error("Error subiendo los adjuntos");
         return false;
       } finally {
         setIsUploading(false);
       }
     },
-    [conversationId, appendLocalMessage],
+    [conversationId, presignAndPut, appendLocalMessage],
   );
 
   const handleSend = () => {
     const content = draft.trim();
+    const hasAttachments = pendingAttachments.length > 0;
+
+    // Caso 1: hay adjuntos en cola -> se suben todos y se crea un solo mensaje
+    // con el texto como caption (igual que WhatsApp/Discord).
+    if (hasAttachments) {
+      if (isUploading) return;
+      if (content.length > MAX_MESSAGE_LENGTH) {
+        toast.error("El texto que acompaña los adjuntos es demasiado largo");
+        return;
+      }
+      const items = pendingAttachments;
+      setDraft("");
+      setPendingAttachments([]);
+      sendWithAttachments(content, items).then((ok) => {
+        if (!ok) {
+          // Restaura el borrador y la cola si falló el envío.
+          setDraft(content);
+          setPendingAttachments(items);
+        } else {
+          // Libera las object URLs de las miniaturas ya enviadas.
+          items.forEach((i) => i.previewUrl && URL.revokeObjectURL(i.previewUrl));
+        }
+      });
+      return;
+    }
+
     if (!content) return;
 
-    // Los mensajes muy largos se convierten automáticamente a un archivo .txt
-    // adjunto en vez de bloquear el envío, igual que hacen apps como Discord.
+    // Caso 2: solo texto muy largo -> se convierte a un .txt adjunto, igual
+    // que hacen apps como Discord.
     if (content.length > MAX_MESSAGE_LENGTH) {
       setDraft("");
       toast.info("Límite de caracteres superado. Se enviará como archivo .txt");
       const file = new File([content], "mensaje.txt", { type: "text/plain" });
-      uploadFile(file).then((ok) => {
+      sendWithAttachments("", [createPendingAttachment(file)]).then((ok) => {
         if (!ok) setDraft(content);
       });
       return;
     }
 
+    // Caso 3: solo texto normal.
     setDraft("");
     startSendTransition(async () => {
       const result = await sendMessageAction(conversationId, content);
@@ -312,9 +414,9 @@ export function ChatWindow({
 
   const onDrop = useCallback(
     (acceptedFiles: File[]) => {
-      acceptedFiles.forEach(uploadFile);
+      enqueueFiles(acceptedFiles);
     },
-    [uploadFile],
+    [enqueueFiles],
   );
 
   const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
@@ -322,6 +424,26 @@ export function ChatWindow({
     noClick: true,
     noKeyboard: true,
   });
+
+  // Pegar imágenes/archivos desde el portapapeles (Ctrl+V) los añade a la cola,
+  // en vez de pegar la imagen como texto. Si el portapapeles solo trae texto,
+  // deja que el textarea lo maneje normalmente.
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      const files: File[] = [];
+      for (const item of Array.from(e.clipboardData.items)) {
+        if (item.kind === "file") {
+          const file = item.getAsFile();
+          if (file) files.push(file);
+        }
+      }
+      if (files.length > 0) {
+        e.preventDefault();
+        enqueueFiles(files);
+      }
+    },
+    [enqueueFiles],
+  );
 
   const handleCopyMessage = useCallback((content: string) => {
     navigator.clipboard
@@ -436,6 +558,7 @@ export function ChatWindow({
               const canEdit = isOwn && !isDeleted && message.attachments.length === 0 && Boolean(message.content);
               const canDelete = isOwn && !isDeleted;
               const canCopy = !isDeleted && Boolean(message.content);
+              const hasCode = !isDeleted && Boolean(message.content?.includes("```"));
 
               return (
                 <motion.div
@@ -498,6 +621,7 @@ export function ChatWindow({
                       <div
                         className={cn(
                           "max-w-[85%] min-w-0 rounded-2xl px-3.5 py-2 text-sm wrap-anywhere whitespace-pre-wrap sm:max-w-md",
+                          hasCode && "sm:max-w-lg",
                           isOwn
                             ? "bg-primary text-primary-foreground"
                             : "bg-muted text-foreground",
@@ -505,7 +629,11 @@ export function ChatWindow({
                           isDeleted && "italic opacity-70",
                         )}
                       >
-                        {isDeleted ? "Mensaje eliminado" : message.content}
+                        {isDeleted ? (
+                          "Mensaje eliminado"
+                        ) : message.content ? (
+                          <MessageContent content={message.content} isOwn={isOwn} />
+                        ) : null}
                         {!isDeleted && message.editedAt && (
                           <span className="ml-1.5 text-[10px] opacity-70">(editado)</span>
                         )}
@@ -575,6 +703,12 @@ export function ChatWindow({
       </AnimatePresence>
 
       <div className="border-t p-3">
+        <AttachmentComposer
+          attachments={pendingAttachments}
+          onRemove={removePending}
+          onReplace={replacePending}
+          disabled={isUploading}
+        />
         <div className="flex items-end gap-2">
           <Button
             type="button"
@@ -592,23 +726,32 @@ export function ChatWindow({
               setDraft(e.target.value);
               if (e.target.value.trim()) notifyTyping();
             }}
+            onPaste={handlePaste}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 handleSend();
               }
             }}
-            placeholder="Escribe un mensaje..."
+            placeholder={
+              pendingAttachments.length > 0
+                ? "Añade un comentario (opcional)..."
+                : "Escribe un mensaje..."
+            }
             className="max-h-32 min-h-8 flex-1 resize-none"
           />
           <Button
             type="button"
             size="icon"
             onClick={handleSend}
-            disabled={isSending || !draft.trim()}
+            disabled={
+              isSending ||
+              isUploading ||
+              (pendingAttachments.length === 0 && !draft.trim())
+            }
             aria-label="Enviar mensaje"
           >
-            {isSending ? <Loader2 className="animate-spin" /> : <Send />}
+            {isSending || isUploading ? <Loader2 className="animate-spin" /> : <Send />}
           </Button>
         </div>
       </div>

@@ -1,19 +1,32 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Download, FileText, File as FileIcon, Loader2, Eye, Copy, Check } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog";
+  Download,
+  FileText,
+  FileCode2,
+  Table2,
+  File as FileIcon,
+  Loader2,
+  Eye,
+  Copy,
+  Check,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/format";
+import {
+  getPreviewKind,
+  getCodeLanguage,
+  isTextLike,
+  parseCsv,
+  detectCsvDelimiter,
+  type PreviewKind,
+} from "@/lib/file-preview";
+import { CodeBlock } from "@/components/chat/code-block";
+import { FilePreviewModal } from "@/components/chat/file-preview-modal";
 
 type AttachmentData = {
   id: string;
@@ -22,29 +35,30 @@ type AttachmentData = {
   fileSize: number;
 };
 
-const TEXT_PREVIEW_MAX_BYTES = 200 * 1024; // no cargar previews de archivos de texto enormes
-
-function isMarkdown(fileName: string) {
-  return /\.md$/i.test(fileName);
-}
-
-function isPlainText(fileName: string, fileType: string) {
-  return /\.txt$/i.test(fileName) || fileType === "text/plain";
-}
-
-function isImage(fileType: string) {
-  return fileType.startsWith("image/");
+function kindIcon(kind: PreviewKind) {
+  switch (kind) {
+    case "code":
+      return <FileCode2 className="size-4 shrink-0 text-muted-foreground" />;
+    case "csv":
+      return <Table2 className="size-4 shrink-0 text-muted-foreground" />;
+    case "markdown":
+    case "text":
+      return <FileText className="size-4 shrink-0 text-muted-foreground" />;
+    default:
+      return <FileIcon className="size-4 shrink-0 text-muted-foreground" />;
+  }
 }
 
 export function MessageAttachment({ attachment }: { attachment: AttachmentData }) {
-  const isTextLike =
-    isMarkdown(attachment.fileName) || isPlainText(attachment.fileName, attachment.fileType);
-  const previewable = isTextLike && attachment.fileSize <= TEXT_PREVIEW_MAX_BYTES;
-  const isImageAttachment = isImage(attachment.fileType);
-  const canPreviewModal = previewable || isImageAttachment;
+  const kind = getPreviewKind(attachment.fileName, attachment.fileType, attachment.fileSize);
+  const textLike = isTextLike(attachment.fileName, attachment.fileType);
+  const isImageAttachment = kind === "image";
+  const isInlineText = kind === "markdown" || kind === "text" || kind === "code" || kind === "csv";
+  const canPreviewModal = isInlineText || isImageAttachment;
+  const codeLanguage = getCodeLanguage(attachment.fileName, attachment.fileType);
 
   const [textContent, setTextContent] = useState<string | null>(null);
-  const [isLoadingPreview, setIsLoadingPreview] = useState(previewable);
+  const [isLoadingPreview, setIsLoadingPreview] = useState(isInlineText);
   const [isDownloading, setIsDownloading] = useState(false);
   const [isCopying, setIsCopying] = useState(false);
   const [justCopied, setJustCopied] = useState(false);
@@ -53,15 +67,14 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
   const [isLoadingFileUrl, setIsLoadingFileUrl] = useState(isImageAttachment);
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
 
+  // Carga el contenido de texto para previsualización inline (código/csv/txt/md).
   useEffect(() => {
-    if (!previewable) return;
-
+    if (!isInlineText) return;
     let cancelled = false;
-
     async function loadPreview() {
       try {
         const res = await fetch(`/api/upload/${attachment.id}`);
-        if (!res.ok) throw new Error("No se pudo obtener la URL del archivo");
+        if (!res.ok) throw new Error();
         const { url } = await res.json();
         const fileRes = await fetch(url);
         const text = await fileRes.text();
@@ -72,24 +85,20 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
         if (!cancelled) setIsLoadingPreview(false);
       }
     }
-
     loadPreview();
     return () => {
       cancelled = true;
     };
-  }, [attachment.id, previewable]);
+  }, [attachment.id, isInlineText]);
 
-  // Las imágenes se previsualizan por defecto como miniatura dentro de la
-  // burbuja, sin esperar a que el usuario abra el modal.
+  // Las imágenes muestran una miniatura sin esperar al modal.
   useEffect(() => {
     if (!isImageAttachment) return;
-
     let cancelled = false;
-
     async function loadThumbnail() {
       try {
         const res = await fetch(`/api/upload/${attachment.id}`);
-        if (!res.ok) throw new Error("No se pudo obtener la URL del archivo");
+        if (!res.ok) throw new Error();
         const { url } = await res.json();
         if (!cancelled) setFileUrl(url);
       } catch {
@@ -98,7 +107,6 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
         if (!cancelled) setIsLoadingFileUrl(false);
       }
     }
-
     loadThumbnail();
     return () => {
       cancelled = true;
@@ -120,10 +128,6 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
     }
   };
 
-  const handleOpenPreview = () => {
-    setIsPreviewOpen(true);
-  };
-
   const handleCopyText = async () => {
     setIsCopying(true);
     try {
@@ -143,6 +147,18 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
     }
   };
 
+  // Para CSV inline mostramos una mini-tabla (primeras filas).
+  const csvPreview = useMemo(() => {
+    if (kind !== "csv" || !textContent) return null;
+    const delimiter = detectCsvDelimiter(textContent);
+    const parsed = parseCsv(textContent, delimiter);
+    return {
+      header: parsed.header,
+      rows: parsed.rows.slice(0, 8),
+      totalRows: parsed.rows.length,
+    };
+  }, [kind, textContent]);
+
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.97 }}
@@ -150,13 +166,10 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
       transition={{ duration: 0.2 }}
       className="mt-1.5 w-full max-w-sm overflow-hidden rounded-lg border bg-background"
     >
+      {/* Cabecera con nombre y acciones */}
       <div className="flex items-center justify-between gap-2 border-b bg-muted/40 px-3 py-2">
         <div className="flex items-center gap-2 overflow-hidden">
-          {previewable ? (
-            <FileText className="size-4 shrink-0 text-muted-foreground" />
-          ) : (
-            <FileIcon className="size-4 shrink-0 text-muted-foreground" />
-          )}
+          {kindIcon(kind)}
           <div className="flex flex-col overflow-hidden">
             <span className="truncate text-xs font-medium">{attachment.fileName}</span>
             <span className="text-[10px] text-muted-foreground">
@@ -169,13 +182,13 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
             <Button
               size="icon-sm"
               variant="ghost"
-              onClick={handleOpenPreview}
+              onClick={() => setIsPreviewOpen(true)}
               aria-label={`Vista previa de ${attachment.fileName}`}
             >
               <Eye />
             </Button>
           )}
-          {isTextLike && (
+          {textLike && (
             <Button
               size="icon-sm"
               variant="ghost"
@@ -183,13 +196,7 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
               disabled={isCopying}
               aria-label={`Copiar contenido de ${attachment.fileName}`}
             >
-              {isCopying ? (
-                <Loader2 className="animate-spin" />
-              ) : justCopied ? (
-                <Check />
-              ) : (
-                <Copy />
-              )}
+              {isCopying ? <Loader2 className="animate-spin" /> : justCopied ? <Check /> : <Copy />}
             </Button>
           )}
           <Button
@@ -204,11 +211,12 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
         </div>
       </div>
 
+      {/* Miniatura de imagen */}
       {isImageAttachment && (
         <div className="border-t bg-muted/20">
           <button
             type="button"
-            onClick={handleOpenPreview}
+            onClick={() => setIsPreviewOpen(true)}
             aria-label={`Ver imagen completa de ${attachment.fileName}`}
             className="block w-full"
           >
@@ -235,21 +243,69 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
         </div>
       )}
 
-      {previewable && (
-        <div className="max-h-64 overflow-y-auto px-3 py-2 text-xs">
+      {/* Preview inline de texto/código/csv/markdown */}
+      {isInlineText && (
+        <div className="max-h-72 overflow-auto">
           {isLoadingPreview ? (
-            <div className="flex items-center gap-2 text-muted-foreground">
+            <div className="flex items-center gap-2 px-3 py-3 text-xs text-muted-foreground">
               <Loader2 className="size-3.5 animate-spin" />
               Cargando previsualización...
             </div>
           ) : textContent === null ? (
-            <p className="text-muted-foreground">No se pudo cargar la previsualización.</p>
-          ) : isMarkdown(attachment.fileName) ? (
-            <div className="markdown-preview text-xs leading-relaxed">
+            <p className="px-3 py-3 text-xs text-muted-foreground">
+              No se pudo cargar la previsualización.
+            </p>
+          ) : kind === "code" ? (
+            <CodeBlock
+              code={textContent}
+              language={codeLanguage ?? "text"}
+              fileName={attachment.fileName}
+              className="rounded-none border-0"
+              maxHeightClass="max-h-72"
+            />
+          ) : kind === "markdown" ? (
+            <div className="markdown-preview px-3 py-2 text-xs leading-relaxed">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{textContent}</ReactMarkdown>
             </div>
+          ) : kind === "csv" && csvPreview ? (
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-[11px]">
+                <thead className="bg-muted/60">
+                  <tr>
+                    {csvPreview.header.map((cell, i) => (
+                      <th
+                        key={i}
+                        className="border-b border-r px-2 py-1 text-left font-semibold whitespace-nowrap"
+                      >
+                        {cell || `col ${i + 1}`}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {csvPreview.rows.map((row, r) => (
+                    <tr key={r} className="even:bg-muted/20">
+                      {csvPreview.header.map((_, c) => (
+                        <td key={c} className="border-b border-r px-2 py-1 align-top whitespace-nowrap">
+                          {row[c] ?? ""}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {csvPreview.totalRows > csvPreview.rows.length && (
+                <button
+                  type="button"
+                  onClick={() => setIsPreviewOpen(true)}
+                  className="w-full bg-muted/40 px-3 py-1.5 text-[11px] font-medium text-primary hover:bg-muted"
+                >
+                  Ver las {csvPreview.totalRows} filas →
+                </button>
+              )}
+            </div>
           ) : (
-            <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed">
+            <pre className="px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-words">
               {textContent}
             </pre>
           )}
@@ -257,71 +313,16 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
       )}
 
       {canPreviewModal && (
-        <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>
-          <DialogContent className="sm:max-w-lg">
-            <DialogHeader>
-              <div className="flex items-center justify-between gap-2 pr-6">
-                <div className="flex min-w-0 flex-col gap-0.5">
-                  <DialogTitle className="truncate">{attachment.fileName}</DialogTitle>
-                  <DialogDescription>{formatBytes(attachment.fileSize)}</DialogDescription>
-                </div>
-                {isTextLike && (
-                  <Button
-                    size="icon-sm"
-                    variant="ghost"
-                    onClick={handleCopyText}
-                    disabled={isCopying}
-                    aria-label={`Copiar contenido de ${attachment.fileName}`}
-                  >
-                    {isCopying ? (
-                      <Loader2 className="animate-spin" />
-                    ) : justCopied ? (
-                      <Check />
-                    ) : (
-                      <Copy />
-                    )}
-                  </Button>
-                )}
-              </div>
-            </DialogHeader>
-            <div className="max-h-[70vh] overflow-y-auto rounded-md border bg-muted/30 p-3">
-              {isImage(attachment.fileType) ? (
-                isLoadingFileUrl ? (
-                  <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-                    <Loader2 className="size-4 animate-spin" />
-                    Cargando imagen...
-                  </div>
-                ) : fileUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={fileUrl}
-                    alt={attachment.fileName}
-                    className="mx-auto max-h-[60vh] w-auto rounded"
-                  />
-                ) : (
-                  <p className="text-sm text-muted-foreground">No se pudo cargar la imagen.</p>
-                )
-              ) : isLoadingPreview ? (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="size-4 animate-spin" />
-                  Cargando previsualización...
-                </div>
-              ) : textContent === null ? (
-                <p className="text-sm text-muted-foreground">
-                  No se pudo cargar la previsualización.
-                </p>
-              ) : isMarkdown(attachment.fileName) ? (
-                <div className="markdown-preview text-sm leading-relaxed">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{textContent}</ReactMarkdown>
-                </div>
-              ) : (
-                <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">
-                  {textContent}
-                </pre>
-              )}
-            </div>
-          </DialogContent>
-        </Dialog>
+        <FilePreviewModal
+          open={isPreviewOpen}
+          onOpenChange={setIsPreviewOpen}
+          fileName={attachment.fileName}
+          fileType={attachment.fileType}
+          fileSize={attachment.fileSize}
+          text={textContent}
+          imageUrl={fileUrl}
+          isLoading={isImageAttachment ? isLoadingFileUrl : isLoadingPreview}
+        />
       )}
     </motion.div>
   );
