@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { motion } from "framer-motion";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { memo, useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
+import { toast } from "sonner";
 import {
   Download,
   FileText,
@@ -18,6 +17,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/format";
 import {
+  getAttachmentText,
+  getAttachmentUrl,
+  downloadAttachment,
+} from "@/lib/attachment-client";
+import {
   getPreviewKind,
   getCodeLanguage,
   isTextLike,
@@ -26,7 +30,16 @@ import {
   type PreviewKind,
 } from "@/lib/file-preview";
 import { CodeBlock } from "@/components/chat/code-block";
-import { FilePreviewModal } from "@/components/chat/file-preview-modal";
+
+// react-markdown + remark-gfm pesan bastante y solo se usan en adjuntos .md;
+// se cargan bajo demanda. Igual el modal de previsualización.
+const MarkdownPreview = dynamic(() => import("@/components/chat/markdown-preview"), {
+  ssr: false,
+});
+const FilePreviewModal = dynamic(
+  () => import("@/components/chat/file-preview-modal").then((m) => m.FilePreviewModal),
+  { ssr: false },
+);
 
 type AttachmentData = {
   id: string;
@@ -49,7 +62,7 @@ function kindIcon(kind: PreviewKind) {
   }
 }
 
-export function MessageAttachment({ attachment }: { attachment: AttachmentData }) {
+function MessageAttachmentImpl({ attachment }: { attachment: AttachmentData }) {
   const kind = getPreviewKind(attachment.fileName, attachment.fileType, attachment.fileSize);
   const textLike = isTextLike(attachment.fileName, attachment.fileType);
   const isImageAttachment = kind === "image";
@@ -71,21 +84,16 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
   useEffect(() => {
     if (!isInlineText) return;
     let cancelled = false;
-    async function loadPreview() {
-      try {
-        const res = await fetch(`/api/upload/${attachment.id}`);
-        if (!res.ok) throw new Error();
-        const { url } = await res.json();
-        const fileRes = await fetch(url);
-        const text = await fileRes.text();
+    getAttachmentText(attachment.id)
+      .then((text) => {
         if (!cancelled) setTextContent(text);
-      } catch {
+      })
+      .catch(() => {
         if (!cancelled) setTextContent(null);
-      } finally {
+      })
+      .finally(() => {
         if (!cancelled) setIsLoadingPreview(false);
-      }
-    }
-    loadPreview();
+      });
     return () => {
       cancelled = true;
     };
@@ -95,19 +103,16 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
   useEffect(() => {
     if (!isImageAttachment) return;
     let cancelled = false;
-    async function loadThumbnail() {
-      try {
-        const res = await fetch(`/api/upload/${attachment.id}`);
-        if (!res.ok) throw new Error();
-        const { url } = await res.json();
+    getAttachmentUrl(attachment.id)
+      .then((url) => {
         if (!cancelled) setFileUrl(url);
-      } catch {
+      })
+      .catch(() => {
         if (!cancelled) setThumbnailFailed(true);
-      } finally {
+      })
+      .finally(() => {
         if (!cancelled) setIsLoadingFileUrl(false);
-      }
-    }
-    loadThumbnail();
+      });
     return () => {
       cancelled = true;
     };
@@ -116,13 +121,9 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
   const handleDownload = async () => {
     setIsDownloading(true);
     try {
-      const res = await fetch(`/api/upload/${attachment.id}`);
-      if (!res.ok) throw new Error();
-      const { url, fileName } = await res.json();
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = fileName;
-      link.click();
+      await downloadAttachment(attachment.id);
+    } catch {
+      toast.error("No se pudo descargar el archivo");
     } finally {
       setIsDownloading(false);
     }
@@ -131,17 +132,12 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
   const handleCopyText = async () => {
     setIsCopying(true);
     try {
-      let text = textContent;
-      if (text === null) {
-        const res = await fetch(`/api/upload/${attachment.id}`);
-        if (!res.ok) throw new Error();
-        const { url } = await res.json();
-        const fileRes = await fetch(url);
-        text = await fileRes.text();
-      }
+      const text = textContent ?? (await getAttachmentText(attachment.id));
       await navigator.clipboard.writeText(text ?? "");
       setJustCopied(true);
       setTimeout(() => setJustCopied(false), 1500);
+    } catch {
+      toast.error("No se pudo copiar el contenido");
     } finally {
       setIsCopying(false);
     }
@@ -160,12 +156,7 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
   }, [kind, textContent]);
 
   return (
-    <motion.div
-      initial={{ opacity: 0, scale: 0.97 }}
-      animate={{ opacity: 1, scale: 1 }}
-      transition={{ duration: 0.2 }}
-      className="mt-1.5 w-full max-w-sm overflow-hidden rounded-lg border bg-background"
-    >
+    <div className="mt-1.5 w-full max-w-sm overflow-hidden rounded-lg border bg-background">
       {/* Cabecera con nombre y acciones */}
       <div className="flex items-center justify-between gap-2 border-b bg-muted/40 px-3 py-2">
         <div className="flex items-center gap-2 overflow-hidden">
@@ -233,6 +224,7 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
                 onError={() => setThumbnailFailed(true)}
                 className="max-h-64 w-full object-cover"
                 loading="lazy"
+                decoding="async"
               />
             ) : (
               <p className="py-6 text-center text-xs text-muted-foreground">
@@ -265,7 +257,7 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
             />
           ) : kind === "markdown" ? (
             <div className="markdown-preview px-3 py-2 text-xs leading-relaxed">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{textContent}</ReactMarkdown>
+              <MarkdownPreview text={textContent} />
             </div>
           ) : kind === "csv" && csvPreview ? (
             <div className="overflow-x-auto">
@@ -312,7 +304,7 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
         </div>
       )}
 
-      {canPreviewModal && (
+      {canPreviewModal && isPreviewOpen && (
         <FilePreviewModal
           open={isPreviewOpen}
           onOpenChange={setIsPreviewOpen}
@@ -324,6 +316,8 @@ export function MessageAttachment({ attachment }: { attachment: AttachmentData }
           isLoading={isImageAttachment ? isLoadingFileUrl : isLoadingPreview}
         />
       )}
-    </motion.div>
+    </div>
   );
 }
+
+export const MessageAttachment = memo(MessageAttachmentImpl);

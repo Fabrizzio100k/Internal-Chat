@@ -1,15 +1,6 @@
 "use client";
 
-/* eslint-disable react-hooks/set-state-in-effect --
- * El reset de status/data al inicio del efecto es intencional: sincroniza
- * el estado local con la prop `url`, que puede cambiar si el usuario navega
- * entre conversaciones sin desmontar este componente (mismo mensaje/posición
- * en la lista, distinto link). Sin este reset se mostraría brevemente el
- * preview del link anterior mientras carga el nuevo.
- */
-
-import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
+import { memo, useEffect, useState } from "react";
 import { Link2 } from "lucide-react";
 
 type LinkPreviewData = {
@@ -22,51 +13,58 @@ type LinkPreviewData = {
 
 type LinkPreviewResponse = LinkPreviewData | { noPreview: true };
 
+// Cache de módulo: null = sin preview. Evita volver a pedir el mismo link cada
+// vez que el mensaje se remonta (scroll, cambio de chat).
+const previewCache = new Map<string, LinkPreviewData | null>();
+const inflight = new Map<string, Promise<LinkPreviewData | null>>();
+
+function loadPreview(url: string): Promise<LinkPreviewData | null> {
+  if (previewCache.has(url)) return Promise.resolve(previewCache.get(url) ?? null);
+  const pending = inflight.get(url);
+  if (pending) return pending;
+
+  const promise = fetch(`/api/link-preview?url=${encodeURIComponent(url)}`)
+    .then(async (res) => {
+      if (!res.ok) throw new Error();
+      const json: LinkPreviewResponse = await res.json();
+      const data = "noPreview" in json ? null : json;
+      previewCache.set(url, data);
+      return data;
+    })
+    .catch(() => null)
+    .finally(() => inflight.delete(url));
+
+  inflight.set(url, promise);
+  return promise;
+}
+
 /**
  * Previsualización tipo "card" para el primer link detectado en un mensaje.
  * Pide los metadatos Open Graph al propio backend (/api/link-preview) en vez
  * de hacer fetch directo desde el navegador, para evitar problemas de CORS
  * y para poder aplicar las validaciones de seguridad server-side (SSRF).
  */
-export function LinkPreviewCard({ url }: { url: string }) {
-  const [data, setData] = useState<LinkPreviewData | null>(null);
-  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+function LinkPreviewCardImpl({ url }: { url: string }) {
+  // Estado asociado a la url que lo originó: al cambiar `url` el resultado
+  // anterior deja de coincidir sin necesidad de resetear dentro del efecto.
+  const [result, setResult] = useState<{ url: string; data: LinkPreviewData | null } | null>(
+    () => (previewCache.has(url) ? { url, data: previewCache.get(url) ?? null } : null),
+  );
 
   useEffect(() => {
+    if (previewCache.has(url)) return;
     let cancelled = false;
-    setStatus("loading");
-    setData(null);
-
-    async function load() {
-      try {
-        const res = await fetch(`/api/link-preview?url=${encodeURIComponent(url)}`);
-        // El endpoint responde 200 incluso cuando no hay preview disponible
-        // (host bloqueado, sitio remoto sin metadatos, etc.), así que un
-        // status no-OK aquí sí es un error real (ruta caída, no autenticado).
-        if (!res.ok) throw new Error();
-        const json: LinkPreviewResponse = await res.json();
-        if ("noPreview" in json) {
-          if (!cancelled) setStatus("error");
-          return;
-        }
-        if (!cancelled) {
-          setData(json);
-          setStatus("ready");
-        }
-      } catch {
-        if (!cancelled) setStatus("error");
-      }
-    }
-
-    load();
+    loadPreview(url).then((data) => {
+      if (!cancelled) setResult({ url, data });
+    });
     return () => {
       cancelled = true;
     };
   }, [url]);
 
-  if (status === "error") return null;
+  const current = result?.url === url ? result : previewCache.has(url) ? { url, data: previewCache.get(url) ?? null } : null;
 
-  if (status === "loading") {
+  if (!current) {
     return (
       <div className="mt-1.5 w-full max-w-sm animate-pulse overflow-hidden rounded-lg border bg-muted/40">
         <div className="h-24 bg-muted" />
@@ -78,13 +76,11 @@ export function LinkPreviewCard({ url }: { url: string }) {
     );
   }
 
+  const data = current.data;
   if (!data || (!data.title && !data.description && !data.image)) return null;
 
   return (
-    <motion.a
-      initial={{ opacity: 0, y: 4 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.15 }}
+    <a
       href={data.url}
       target="_blank"
       rel="noopener noreferrer nofollow"
@@ -95,6 +91,8 @@ export function LinkPreviewCard({ url }: { url: string }) {
         <img
           src={data.image}
           alt=""
+          loading="lazy"
+          decoding="async"
           className="h-32 w-full object-cover"
           onError={(e) => {
             e.currentTarget.style.display = "none";
@@ -106,15 +104,13 @@ export function LinkPreviewCard({ url }: { url: string }) {
           <Link2 className="size-3" />
           {data.siteName}
         </span>
-        {data.title && (
-          <span className="line-clamp-1 text-xs font-medium">{data.title}</span>
-        )}
+        {data.title && <span className="line-clamp-1 text-xs font-medium">{data.title}</span>}
         {data.description && (
-          <span className="line-clamp-2 text-[11px] text-muted-foreground">
-            {data.description}
-          </span>
+          <span className="line-clamp-2 text-[11px] text-muted-foreground">{data.description}</span>
         )}
       </div>
-    </motion.a>
+    </a>
   );
 }
+
+export const LinkPreviewCard = memo(LinkPreviewCardImpl);

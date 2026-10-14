@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { CodeBlock } from "@/components/chat/code-block";
 
 /**
@@ -41,7 +41,13 @@ function parseSegments(content: string): Segment[] {
   return segments;
 }
 
-export function MessageContent({ content, isOwn }: { content: string; isOwn: boolean }) {
+export const MessageContent = memo(function MessageContent({
+  content,
+  isOwn,
+}: {
+  content: string;
+  isOwn: boolean;
+}) {
   const segments = useMemo(() => parseSegments(content), [content]);
 
   // Sin bloques de código: render simple (el contenedor ya aplica whitespace-pre-wrap).
@@ -57,14 +63,11 @@ export function MessageContent({ content, isOwn }: { content: string; isOwn: boo
             <CodeBlock code={seg.value} language={seg.lang} maxHeightClass="max-h-80" />
           </div>
         ) : seg.value.trim() === "" ? null : (
-          <span
-            key={i}
-            className={isOwn ? "whitespace-pre-wrap" : "whitespace-pre-wrap"}
-          >
+          <span key={i} className="whitespace-pre-wrap" data-own={isOwn || undefined}>
             {seg.value.replace(/^\n+|\n+$/g, "")}
           </span>
         ),
       )}
     </div>
   );
-}
+});

@@ -218,3 +218,44 @@
   margin: 0 !important;
   background: transparent !important;
 }
+
+/* Safe areas (iPhone: home indicator / barra inferior, notch, bordes).
+   .safe-content: respeta los 4 lados, con un mínimo de padding.
+   .safe-space: solo abajo (para barras fijas como el compositor de mensajes).
+   Requieren viewport-fit=cover (ver `viewport` en app/layout.tsx). */
+.safe-content {
+  padding-top: max(0.75rem, env(safe-area-inset-top));
+  padding-right: max(0.75rem, env(safe-area-inset-right));
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  padding-left: max(0.75rem, env(safe-area-inset-left));
+}
+.safe-space {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  padding-left: max(0.75rem, env(safe-area-inset-left));
+  padding-right: max(0.75rem, env(safe-area-inset-right));
+}
+
+/* Scroll fluido en listas de chat: aísla el layout/paint y evita rebotes de scroll
+   encadenado hacia el body. */
+.chat-scroll {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  contain: content;
+}
+
+/* Animación de entrada de mensajes nuevos (CSS puro, sin JS por mensaje). */
+@keyframes message-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.message-in { animation: message-in 0.18s ease-out; }
+
+@keyframes message-flash {
+  0%, 60% { background-color: color-mix(in oklch, var(--primary) 18%, transparent); }
+  100% { background-color: transparent; }
+}
+.message-flash { animation: message-flash 1.8s ease-out; border-radius: 0.75rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .message-in, .message-flash { animation: none; }
+}

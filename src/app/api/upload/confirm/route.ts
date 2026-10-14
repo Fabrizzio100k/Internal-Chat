@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { verifyUploadedObject, MAX_FILE_SIZE_BYTES } from "@/lib/storage";
+import { publishToConversation, toRealtimeMessage } from "@/lib/realtime-server";
 
 /**
  * Segundo paso de la subida de adjuntos: el navegador ya subió cada archivo
@@ -139,6 +140,11 @@ export async function POST(request: NextRequest) {
       },
     },
     include: { attachments: true, sender: { select: { id: true, username: true } } },
+  });
+
+  publishToConversation(conversationId, {
+    type: "message",
+    message: toRealtimeMessage(message),
   });
 
   return NextResponse.json({ success: true, message });

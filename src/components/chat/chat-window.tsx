@@ -1,16 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useDropzone } from "react-dropzone";
-import { motion, AnimatePresence } from "framer-motion";
-import { Send, Paperclip, Loader2, Menu, X, Check, UploadCloud } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import { Loader2, Menu, UploadCloud, Users } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { cn } from "@/lib/utils";
-import { extractFirstUrl } from "@/lib/format";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import {
   sendMessageAction,
   listMessagesAction,
@@ -18,432 +21,328 @@ import {
   deleteMessageAction,
 } from "@/lib/actions/messages";
 import { markConversationReadAction } from "@/lib/actions/chat";
-import { MessageAttachment } from "@/components/chat/message-attachment";
-import { MessageContent } from "@/components/chat/message-content";
-import {
-  AttachmentComposer,
-  createPendingAttachment,
-  type PendingAttachment,
-} from "@/components/chat/attachment-composer";
-import { MessageTimestamp } from "@/components/chat/message-timestamp";
 import { PresenceDot } from "@/components/chat/presence-dot";
 import { TypingIndicator } from "@/components/chat/typing-indicator";
-import { LinkPreviewCard } from "@/components/chat/link-preview-card";
-import { MessageContextMenu } from "@/components/chat/message-context-menu";
+import { MessageItem, type MessageData } from "@/components/chat/message-item";
+import { MessageComposer, type MessageComposerHandle } from "@/components/chat/message-composer";
+import { GroupInfoDialog } from "@/components/chat/group-info-dialog";
+import { getGroupInfoAction } from "@/lib/actions/groups";
+import type { GroupInfo, GroupMember } from "@/lib/types/groups";
 import { usePresence } from "@/hooks/use-presence";
+import { useInboxHandler } from "@/hooks/use-inbox";
 import { useTypingStatus } from "@/hooks/use-typing";
 import { useSidebar } from "@/hooks/use-sidebar";
 
 type SessionUser = { userId: string; username: string };
-type OtherUser = { id: string; username: string };
+type Member = { id: string; username: string };
 
-type AttachmentData = {
-  id: string;
-  fileName: string;
-  fileType: string;
-  fileSize: number;
-};
-
-type MessageData = {
-  id: string;
-  conversationId: string;
-  senderId: string;
-  content: string | null;
-  createdAt: string | Date;
-  editedAt?: string | Date | null;
-  deletedAt?: string | Date | null;
-  sender: { id: string; username: string };
-  attachments: AttachmentData[];
-};
-
-const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024;
-const MAX_MESSAGE_LENGTH = 5000;
-const MAX_ATTACHMENTS = 10;
 const SCROLL_TOP_THRESHOLD = 80; // px desde arriba para disparar "cargar más"
+const STICK_BOTTOM_THRESHOLD = 120; // px desde el fondo para seguir pegado al final
+
+function scrollToBottom(el: HTMLElement) {
+  el.scrollTop = el.scrollHeight;
+}
 
 export function ChatWindow({
   conversationId,
   currentUser,
+  isGroup,
+  title,
   otherUser,
+  members: initialMembers,
+  myRole: initialRole,
   initialMessages,
   initialHasMore,
+  highlightMessageId,
 }: {
   conversationId: string;
   currentUser: SessionUser;
-  otherUser: OtherUser;
+  isGroup: boolean;
+  title: string;
+  otherUser: Member | null;
+  members: GroupMember[];
+  myRole: "ADMIN" | "MEMBER";
   initialMessages: MessageData[];
   initialHasMore: boolean;
+  highlightMessageId?: string;
 }) {
   const [messages, setMessages] = useState<MessageData[]>(initialMessages);
   const [hasMore, setHasMore] = useState(initialHasMore);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
-  const [isSending, startSendTransition] = useTransition();
-  const [isUploading, setIsUploading] = useState(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState("");
-  const [isSavingEdit, startEditTransition] = useTransition();
-  const [, startDeleteTransition] = useTransition();
+  const [group, setGroup] = useState<GroupInfo>({
+    name: title,
+    myRole: initialRole,
+    members: initialMembers,
+  });
+  const [isGroupInfoOpen, setIsGroupInfoOpen] = useState(false);
+  const members = group.members;
+  const displayTitle = isGroup ? group.name : title;
+
+  // Refresca miembros/roles/nombre del grupo (tras una acción o un evento en vivo).
+  const refreshGroup = useCallback(() => {
+    if (!isGroup) return;
+    getGroupInfoAction(conversationId)
+      .then((info) => info && setGroup(info))
+      .catch(() => {});
+  }, [conversationId, isGroup]);
+  const refreshGroupRef = useRef(refreshGroup);
+  useEffect(() => {
+    refreshGroupRef.current = refreshGroup;
+  }, [refreshGroup]);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<MessageComposerHandle>(null);
   const seenMessageIds = useRef(new Set(initialMessages.map((m) => m.id)));
-  const shouldStickToBottom = useRef(true);
+  const shouldStickToBottom = useRef(!highlightMessageId);
+  // Estado de scroll leído desde el handler sin re-crearlo en cada render.
+  const stateRef = useRef({ hasMore, isLoadingMore: false, oldestCreatedAt: "" });
+  const restoreScrollRef = useRef<number | null>(null);
+  const scrollRafRef = useRef<number | null>(null);
 
   const { onlineUserIds, isRealtimeConnected } = usePresence();
-  const isOtherUserOnline = onlineUserIds.has(otherUser.id);
   const { toggle: toggleSidebar } = useSidebar();
   const { typingUserIds, notifyTyping } = useTypingStatus(conversationId, currentUser.userId);
-  const isOtherUserTyping = typingUserIds.has(otherUser.id);
 
-  // Marca la conversación como leída al abrirla. Esto se hace aquí (efecto
-  // en el cliente, disparado después del render) y no en el Server Component
-  // de la página, porque invocar una Server Action que muta datos durante
-  // el render de una página no está soportado por Next.js.
+  const memberNames = useMemo(() => new Map(members.map((m) => [m.id, m.username])), [members]);
+  const isOtherUserOnline = otherUser ? onlineUserIds.has(otherUser.id) : false;
+  const typingOthers = [...typingUserIds].filter((id) => id !== currentUser.userId);
+  const isSomeoneTyping = typingOthers.length > 0;
+
+  // Mantener el cursor/flags en un ref evita re-crear handleScroll con cada mensaje.
+  const oldest = messages[0]?.createdAt;
+  const oldestIso = oldest ? (typeof oldest === "string" ? oldest : oldest.toISOString()) : "";
+  useEffect(() => {
+    stateRef.current.hasMore = hasMore;
+    stateRef.current.oldestCreatedAt = oldestIso;
+  }, [hasMore, oldestIso]);
+
+  // Posición inicial: al fondo, o centrado en el mensaje buscado. Se hace antes
+  // del primer pintado para que no se vea ningún salto.
+  useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    if (highlightMessageId) {
+      document
+        .getElementById(`msg-${highlightMessageId}`)
+        ?.scrollIntoView({ block: "center" });
+    } else {
+      scrollToBottom(container);
+    }
+    // Solo al montar (la página remonta ChatWindow al cambiar de conversación/mensaje).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Marca la conversación como leída al abrirla.
   useEffect(() => {
     markConversationReadAction(conversationId);
   }, [conversationId]);
 
-  // Al llegar un mensaje nuevo (propio o remoto), solo scrolleamos al fondo
-  // si el usuario ya estaba viendo el fondo (para no interrumpir su lectura
-  // si está revisando mensajes antiguos). Si el mensaje es de la otra persona
-  // y la ventana está abierta, también refrescamos lastReadAt para que no
-  // quede un "no leído" fantasma si el usuario vuelve a la lista y regresa.
-  const lastMessageSenderId = messages.at(-1)?.senderId;
-  useEffect(() => {
-    if (shouldStickToBottom.current) {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-    }
-    if (lastMessageSenderId && lastMessageSenderId !== currentUser.userId) {
-      markConversationReadAction(conversationId);
-    }
-  }, [messages, lastMessageSenderId, conversationId, currentUser.userId]);
-
-  // Al aparecer la burbuja de "escribiendo...", igual que con los mensajes,
-  // baja el scroll automáticamente solo si el usuario ya estaba viendo el fondo.
-  useEffect(() => {
-    if (isOtherUserTyping && shouldStickToBottom.current) {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-    }
-  }, [isOtherUserTyping]);
-
-  const handleScroll = useCallback(async () => {
+  // Tras cambios en la lista: restaura la posición si se cargó historial arriba,
+  // o baja al final (sin animación smooth, que en iOS se siente lenta) si el
+  // usuario ya estaba abajo.
+  const lastMessage = messages.at(-1);
+  const lastMessageId = lastMessage?.id;
+  const lastMessageSenderId = lastMessage?.senderId;
+  useLayoutEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
-
-    const distanceFromBottom =
-      container.scrollHeight - container.scrollTop - container.clientHeight;
-    shouldStickToBottom.current = distanceFromBottom < 120;
-
-    if (container.scrollTop > SCROLL_TOP_THRESHOLD || !hasMore || isLoadingMore) {
+    if (restoreScrollRef.current !== null) {
+      container.scrollTop += container.scrollHeight - restoreScrollRef.current;
+      restoreScrollRef.current = null;
       return;
     }
+    if (shouldStickToBottom.current) scrollToBottom(container);
+  }, [messages.length, lastMessageId]);
 
+  // Mensaje nuevo de otra persona con la ventana abierta: refresca lastReadAt.
+  useEffect(() => {
+    if (lastMessageId && lastMessageSenderId && lastMessageSenderId !== currentUser.userId) {
+      markConversationReadAction(conversationId);
+    }
+  }, [lastMessageId, lastMessageSenderId, conversationId, currentUser.userId]);
+
+  useEffect(() => {
+    if (isSomeoneTyping && shouldStickToBottom.current && scrollContainerRef.current) {
+      scrollToBottom(scrollContainerRef.current);
+    }
+  }, [isSomeoneTyping]);
+
+  // Si el contenido crece (imágenes que terminan de cargar, previews, teclado
+  // del móvil que redimensiona el contenedor) y estábamos abajo, seguimos abajo.
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    const content = contentRef.current;
+    if (!container || !content || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (shouldStickToBottom.current) scrollToBottom(container);
+    });
+    observer.observe(content);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  const loadOlder = useCallback(async () => {
+    const container = scrollContainerRef.current;
+    const state = stateRef.current;
+    if (!container || state.isLoadingMore || !state.hasMore || !state.oldestCreatedAt) return;
+
+    state.isLoadingMore = true;
     setIsLoadingMore(true);
-    const oldestMessage = messages[0];
-    const previousScrollHeight = container.scrollHeight;
-
     try {
-      const cursor =
-        oldestMessage && typeof oldestMessage.createdAt !== "string"
-          ? oldestMessage.createdAt.toISOString()
-          : (oldestMessage?.createdAt as string | undefined);
-
-      const result = await listMessagesAction(conversationId, cursor);
-
+      const result = await listMessagesAction(conversationId, state.oldestCreatedAt);
       result.messages.forEach((m) => seenMessageIds.current.add(m.id));
+      restoreScrollRef.current = container.scrollHeight;
       setMessages((prev) => [...result.messages, ...prev]);
       setHasMore(result.hasMore);
-
-      // Mantiene la posición visual del scroll tras insertar mensajes arriba.
-      requestAnimationFrame(() => {
-        if (container) {
-          container.scrollTop += container.scrollHeight - previousScrollHeight;
-        }
-      });
+    } catch {
+      toast.error("No se pudo cargar el historial");
     } finally {
+      state.isLoadingMore = false;
       setIsLoadingMore(false);
     }
-  }, [conversationId, hasMore, isLoadingMore, messages]);
-
-  // Suscripción a nuevos mensajes de esta conversación vía Supabase Realtime.
-  useEffect(() => {
-    const supabase = createSupabaseBrowserClient();
-
-    const channel = supabase
-      .channel(`messages:${conversationId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "messages",
-          filter: `conversationId=eq.${conversationId}`,
-        },
-        async (payload) => {
-          const newMessageId = payload.new.id as string;
-          if (seenMessageIds.current.has(newMessageId)) return;
-          // Marca como visto ANTES del await para cerrar la ventana de carrera:
-          // si el mensaje también se inserta localmente (envío propio) mientras
-          // esperamos el fetch, no lo insertaremos dos veces.
-          seenMessageIds.current.add(newMessageId);
-
-          // El evento de Postgres no trae las relaciones (sender/attachments),
-          // así que pedimos el mensaje completo vía la action existente.
-          const res = await fetch(`/api/messages/${newMessageId}`);
-          if (!res.ok) {
-            // Si falló, permite reintentar en un evento futuro.
-            seenMessageIds.current.delete(newMessageId);
-            return;
-          }
-          const message: MessageData = await res.json();
-
-          // Defensa extra: deduplica dentro del propio setMessages por si el
-          // mensaje ya está en la lista (p. ej. insertado localmente).
-          setMessages((prev) =>
-            prev.some((m) => m.id === message.id) ? prev : [...prev, message],
-          );
-        },
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
   }, [conversationId]);
+
+  // Handler de scroll ligero: una lectura de layout por frame como máximo y sin
+  // setState salvo cuando de verdad hay que cargar más historial.
+  const handleScroll = useCallback(() => {
+    if (scrollRafRef.current !== null) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      const container = scrollContainerRef.current;
+      if (!container) return;
+      const distanceFromBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight;
+      shouldStickToBottom.current = distanceFromBottom < STICK_BOTTOM_THRESHOLD;
+      if (container.scrollTop <= SCROLL_TOP_THRESHOLD) void loadOlder();
+    });
+  }, [loadOlder]);
+
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current !== null) cancelAnimationFrame(scrollRafRef.current);
+    };
+  }, []);
+
+  // Eventos en vivo (inbox privado del usuario) que pertenecen a ESTA conversación.
+  useInboxHandler((event) => {
+    switch (event.type) {
+      case "message": {
+        const incoming = event.message;
+        if (incoming.conversationId !== conversationId) return;
+        if (seenMessageIds.current.has(incoming.id)) return;
+        seenMessageIds.current.add(incoming.id);
+
+        // Evento de grupo (alta/baja, rol, renombrado): refresca el panel de miembros.
+        if (incoming.kind) refreshGroupRef.current();
+
+        const message: MessageData = { ...incoming, isNew: true };
+        setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]));
+        return;
+      }
+      case "message_updated": {
+        if (event.conversationId !== conversationId) return;
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === event.messageId ? { ...m, content: event.content, editedAt: event.editedAt } : m,
+          ),
+        );
+        return;
+      }
+      case "message_deleted": {
+        if (event.conversationId !== conversationId) return;
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === event.messageId ? { ...m, content: null, deletedAt: event.deletedAt } : m,
+          ),
+        );
+        return;
+      }
+      case "resync": {
+        // Reconexión: trae lo último y añade lo que no tengamos.
+        listMessagesAction(conversationId)
+          .then((result) => {
+            const fresh = result.messages.filter((m) => !seenMessageIds.current.has(m.id));
+            if (fresh.length === 0) return;
+            fresh.forEach((m) => seenMessageIds.current.add(m.id));
+            setMessages((prev) => {
+              const known = new Set(prev.map((m) => m.id));
+              const merged = [...prev, ...fresh.filter((m) => !known.has(m.id))];
+              return merged.sort(
+                (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+              );
+            });
+          })
+          .catch(() => {});
+        return;
+      }
+      default:
+        return;
+    }
+  });
 
   const appendLocalMessage = useCallback((message: MessageData) => {
     seenMessageIds.current.add(message.id);
     shouldStickToBottom.current = true;
-    setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]));
-  }, []);
-
-  // Encola archivos como adjuntos pendientes (no los sube todavía). El usuario
-  // los revisa/edita y luego pulsa enviar, como en Discord/WhatsApp.
-  const enqueueFiles = useCallback((files: File[]) => {
-    if (files.length === 0) return;
-    setPendingAttachments((prev) => {
-      const room = MAX_ATTACHMENTS - prev.length;
-      if (room <= 0) {
-        toast.error(`Máximo ${MAX_ATTACHMENTS} adjuntos por mensaje`);
-        return prev;
-      }
-      const accepted: PendingAttachment[] = [];
-      for (const file of files) {
-        if (accepted.length >= room) {
-          toast.error(`Máximo ${MAX_ATTACHMENTS} adjuntos por mensaje`);
-          break;
-        }
-        if (file.size > MAX_FILE_SIZE_BYTES) {
-          toast.error(`"${file.name}" supera el límite de 20MB`);
-          continue;
-        }
-        accepted.push(createPendingAttachment(file));
-      }
-      return [...prev, ...accepted];
-    });
-  }, []);
-
-  const removePending = useCallback((id: string) => {
-    setPendingAttachments((prev) => {
-      const target = prev.find((p) => p.id === id);
-      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
-      return prev.filter((p) => p.id !== id);
-    });
-  }, []);
-
-  const replacePending = useCallback((id: string, file: File) => {
-    setPendingAttachments((prev) =>
-      prev.map((p) => {
-        if (p.id !== id) return p;
-        if (p.previewUrl) URL.revokeObjectURL(p.previewUrl);
-        return createPendingAttachment(file);
-      }),
+    setMessages((prev) =>
+      prev.some((m) => m.id === message.id) ? prev : [...prev, { ...message, isNew: true }],
     );
   }, []);
 
-  // Sube un único archivo a S3 vía URL firmada y devuelve sus metadatos de
-  // storage, o null si algo falló. No crea ningún mensaje (eso se hace después
-  // en un solo confirm con todos los adjuntos).
-  const presignAndPut = useCallback(
-    async (file: File): Promise<{ storagePath: string } | null> => {
-      const presignRes = await fetch("/api/upload/presign", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          conversationId,
-          fileName: file.name,
-          fileType: file.type || "application/octet-stream",
-          fileSize: file.size,
-        }),
-      });
-      const presignData = await presignRes.json();
-      if (!presignRes.ok) {
-        toast.error(presignData.error ?? `No se pudo subir "${file.name}"`);
-        return null;
-      }
-      const { uploadUrl, storagePath } = presignData;
-
-      const uploadRes = await fetch(uploadUrl, {
-        method: "PUT",
-        headers: { "Content-Type": file.type || "application/octet-stream" },
-        body: file,
-      });
-      if (!uploadRes.ok) {
-        toast.error(`No se pudo subir "${file.name}"`);
-        return null;
-      }
-      return { storagePath };
-    },
-    [conversationId],
-  );
-
-  // Sube todos los adjuntos pendientes y crea UN mensaje con ellos (+ texto).
-  const sendWithAttachments = useCallback(
-    async (content: string, items: PendingAttachment[]): Promise<boolean> => {
-      setIsUploading(true);
-      try {
-        const uploaded = await Promise.all(
-          items.map(async (item) => {
-            const result = await presignAndPut(item.file);
-            if (!result) return null;
-            return {
-              storagePath: result.storagePath,
-              fileName: item.file.name,
-              fileType: item.file.type || "application/octet-stream",
-              fileSize: item.file.size,
-            };
-          }),
-        );
-
-        if (uploaded.some((u) => u === null)) return false;
-
-        const confirmRes = await fetch("/api/upload/confirm", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            conversationId,
-            content: content || undefined,
-            attachments: uploaded,
-          }),
-        });
-        const confirmData = await confirmRes.json();
-        if (!confirmRes.ok || !confirmData.success) {
-          toast.error(confirmData.error ?? "No se pudo enviar los adjuntos");
-          return false;
-        }
-
-        appendLocalMessage(confirmData.message);
-        return true;
-      } catch {
-        toast.error("Error subiendo los adjuntos");
-        return false;
-      } finally {
-        setIsUploading(false);
-      }
-    },
-    [conversationId, presignAndPut, appendLocalMessage],
-  );
-
-  const handleSend = () => {
-    const content = draft.trim();
-    const hasAttachments = pendingAttachments.length > 0;
-
-    // Caso 1: hay adjuntos en cola -> se suben todos y se crea un solo mensaje
-    // con el texto como caption (igual que WhatsApp/Discord).
-    if (hasAttachments) {
-      if (isUploading) return;
-      if (content.length > MAX_MESSAGE_LENGTH) {
-        toast.error("El texto que acompaña los adjuntos es demasiado largo");
-        return;
-      }
-      const items = pendingAttachments;
-      setDraft("");
-      setPendingAttachments([]);
-      sendWithAttachments(content, items).then((ok) => {
-        if (!ok) {
-          // Restaura el borrador y la cola si falló el envío.
-          setDraft(content);
-          setPendingAttachments(items);
-        } else {
-          // Libera las object URLs de las miniaturas ya enviadas.
-          items.forEach((i) => i.previewUrl && URL.revokeObjectURL(i.previewUrl));
-        }
-      });
-      return;
-    }
-
-    if (!content) return;
-
-    // Caso 2: solo texto muy largo -> se convierte a un .txt adjunto, igual
-    // que hacen apps como Discord.
-    if (content.length > MAX_MESSAGE_LENGTH) {
-      setDraft("");
-      toast.info("Límite de caracteres superado. Se enviará como archivo .txt");
-      const file = new File([content], "mensaje.txt", { type: "text/plain" });
-      sendWithAttachments("", [createPendingAttachment(file)]).then((ok) => {
-        if (!ok) setDraft(content);
-      });
-      return;
-    }
-
-    // Caso 3: solo texto normal.
-    setDraft("");
-    startSendTransition(async () => {
-      const result = await sendMessageAction(conversationId, content);
-      if (!result.success) {
-        toast.error(result.error ?? "No se pudo enviar el mensaje");
-        setDraft(content);
-        return;
-      }
-      // Insertamos localmente de inmediato; el realtime lo deduplica si llega después.
-      if (result.messageId) {
-        appendLocalMessage({
-          id: result.messageId,
+  // Envío optimista: la burbuja aparece al instante (atenuada) y se confirma
+  // cuando responde el servidor. Si falla, se retira y el compositor restaura el texto.
+  const handleSendText = useCallback(
+    async (content: string): Promise<boolean> => {
+      const tempId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      shouldStickToBottom.current = true;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: tempId,
           conversationId,
           senderId: currentUser.userId,
           content,
           createdAt: new Date().toISOString(),
           sender: { id: currentUser.userId, username: currentUser.username },
           attachments: [],
-        });
-      }
-    });
-  };
+          pending: true,
+          isNew: true,
+        },
+      ]);
 
-  const onDrop = useCallback(
-    (acceptedFiles: File[]) => {
-      enqueueFiles(acceptedFiles);
+      let result: Awaited<ReturnType<typeof sendMessageAction>>;
+      try {
+        result = await sendMessageAction(conversationId, content);
+      } catch {
+        result = { success: false, error: "No se pudo enviar el mensaje" };
+      }
+
+      if (!result.success || !result.messageId) {
+        toast.error(result.error ?? "No se pudo enviar el mensaje");
+        setMessages((prev) => prev.filter((m) => m.id !== tempId));
+        return false;
+      }
+
+      const realId = result.messageId;
+      seenMessageIds.current.add(realId);
+      setMessages((prev) => {
+        // Si Realtime ya trajo el mensaje real, descartamos el temporal.
+        if (prev.some((m) => m.id === realId)) return prev.filter((m) => m.id !== tempId);
+        return prev.map((m) => (m.id === tempId ? { ...m, id: realId, pending: false } : m));
+      });
+      return true;
     },
-    [enqueueFiles],
+    [conversationId, currentUser.userId, currentUser.username],
   );
 
-  const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
+  const onDrop = useCallback((files: File[]) => composerRef.current?.addFiles(files), []);
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     noClick: true,
     noKeyboard: true,
   });
-
-  // Pegar imágenes/archivos desde el portapapeles (Ctrl+V) los añade a la cola,
-  // en vez de pegar la imagen como texto. Si el portapapeles solo trae texto,
-  // deja que el textarea lo maneje normalmente.
-  const handlePaste = useCallback(
-    (e: React.ClipboardEvent) => {
-      const files: File[] = [];
-      for (const item of Array.from(e.clipboardData.items)) {
-        if (item.kind === "file") {
-          const file = item.getAsFile();
-          if (file) files.push(file);
-        }
-      }
-      if (files.length > 0) {
-        e.preventDefault();
-        enqueueFiles(files);
-      }
-    },
-    [enqueueFiles],
-  );
 
   const handleCopyMessage = useCallback((content: string) => {
     navigator.clipboard
@@ -452,57 +351,52 @@ export function ChatWindow({
       .catch(() => toast.error("No se pudo copiar el mensaje"));
   }, []);
 
-  const handleStartEdit = useCallback((message: MessageData) => {
-    setEditingMessageId(message.id);
-    setEditDraft(message.content ?? "");
-  }, []);
+  const handleStartEdit = useCallback((messageId: string) => setEditingMessageId(messageId), []);
+  const handleCancelEdit = useCallback(() => setEditingMessageId(null), []);
 
-  const handleCancelEdit = useCallback(() => {
+  const handleSaveEdit = useCallback(async (messageId: string, content: string) => {
+    const result = await editMessageAction(messageId, content);
+    if (!result.success) {
+      toast.error(result.error ?? "No se pudo editar el mensaje");
+      return false;
+    }
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId ? { ...m, content, editedAt: new Date().toISOString() } : m,
+      ),
+    );
     setEditingMessageId(null);
-    setEditDraft("");
+    return true;
   }, []);
 
-  const handleSaveEdit = useCallback(() => {
-    const messageId = editingMessageId;
-    const content = editDraft.trim();
-    if (!messageId || !content) return;
-
-    startEditTransition(async () => {
-      const result = await editMessageAction(messageId, content);
-      if (!result.success) {
-        toast.error(result.error ?? "No se pudo editar el mensaje");
-        return;
-      }
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === messageId ? { ...m, content, editedAt: new Date().toISOString() } : m,
-        ),
-      );
-      setEditingMessageId(null);
-      setEditDraft("");
-    });
-  }, [editingMessageId, editDraft]);
-
-  const handleDeleteMessage = useCallback((messageId: string) => {
-    startDeleteTransition(async () => {
-      const result = await deleteMessageAction(messageId);
-      if (!result.success) {
-        toast.error(result.error ?? "No se pudo eliminar el mensaje");
-        return;
-      }
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === messageId ? { ...m, content: null, deletedAt: new Date().toISOString() } : m,
-        ),
-      );
-    });
+  const handleDeleteMessage = useCallback(async (messageId: string) => {
+    const result = await deleteMessageAction(messageId);
+    if (!result.success) {
+      toast.error(result.error ?? "No se pudo eliminar el mensaje");
+      return;
+    }
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId ? { ...m, content: null, deletedAt: new Date().toISOString() } : m,
+      ),
+    );
   }, []);
+
+  const headerSubtitle = isRealtimeConnected
+    ? isOtherUserOnline
+      ? "En línea"
+      : "Desconectado"
+    : "Estado no disponible";
+
+  const typingLabel = isGroup
+    ? `${typingOthers.map((id) => memberNames.get(id) ?? "Alguien").join(", ")} escribiendo`
+    : null;
 
   return (
-    <div {...getRootProps()} className="relative flex h-full flex-1 flex-col overflow-hidden">
+    <div {...getRootProps()} className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden">
       <input {...getInputProps()} />
 
-      <header className="flex items-center gap-3 border-b px-4 py-3">
+      <header className="flex shrink-0 items-center gap-3 border-b px-4 py-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
         <Button
           type="button"
           variant="ghost"
@@ -513,32 +407,62 @@ export function ChatWindow({
         >
           <Menu />
         </Button>
-        <div className="relative">
-          <Avatar>
-            <AvatarFallback>{otherUser.username.slice(0, 2).toUpperCase()}</AvatarFallback>
-          </Avatar>
-          {isRealtimeConnected && (
-            <PresenceDot online={isOtherUserOnline} className="absolute -right-0.5 -bottom-0.5" />
-          )}
-        </div>
-        <div className="flex flex-col">
-          <span className="text-sm font-medium">{otherUser.username}</span>
-          <span className="text-xs text-muted-foreground">
-            {isRealtimeConnected
-              ? isOtherUserOnline
-                ? "En línea"
-                : "Desconectado"
-              : "Estado no disponible"}
-          </span>
-        </div>
+        {isGroup ? (
+          <button
+            type="button"
+            onClick={() => setIsGroupInfoOpen(true)}
+            className="flex min-w-0 items-center gap-3 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label="Ver información del grupo"
+          >
+            <Avatar>
+              <AvatarFallback>
+                <Users className="size-4" />
+              </AvatarFallback>
+            </Avatar>
+            <div className="flex min-w-0 flex-col">
+              <span className="truncate text-sm font-medium">{displayTitle}</span>
+              <span className="truncate text-xs text-muted-foreground">
+                {members.map((m) => m.username).join(", ")}
+              </span>
+            </div>
+          </button>
+        ) : (
+          <>
+            <div className="relative">
+              <Avatar>
+                <AvatarFallback>{title.slice(0, 2).toUpperCase()}</AvatarFallback>
+              </Avatar>
+              {isRealtimeConnected && (
+                <PresenceDot online={isOtherUserOnline} className="absolute -right-0.5 -bottom-0.5" />
+              )}
+            </div>
+            <div className="flex min-w-0 flex-col">
+              <span className="truncate text-sm font-medium">{title}</span>
+              <span className="truncate text-xs text-muted-foreground">{headerSubtitle}</span>
+            </div>
+          </>
+        )}
       </header>
+
+      {isGroup && (
+        <GroupInfoDialog
+          open={isGroupInfoOpen}
+          onOpenChange={setIsGroupInfoOpen}
+          conversationId={conversationId}
+          currentUserId={currentUser.userId}
+          name={group.name}
+          members={members}
+          myRole={group.myRole}
+          onChanged={refreshGroup}
+        />
+      )}
 
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-x-hidden overflow-y-auto"
+        className="chat-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
       >
-        <div className="flex min-w-0 flex-col gap-3 p-4">
+        <div ref={contentRef} className="flex min-w-0 flex-col gap-3 p-4">
           {isLoadingMore && (
             <div className="flex justify-center py-1">
               <Loader2 className="size-4 animate-spin text-muted-foreground" />
@@ -549,122 +473,39 @@ export function ChatWindow({
               Inicio de la conversación
             </p>
           )}
-          <AnimatePresence initial={false}>
-            {messages.map((message) => {
-              const isOwn = message.senderId === currentUser.userId;
-              const isDeleted = Boolean(message.deletedAt);
-              const isEditing = editingMessageId === message.id;
-              const previewUrl = !isDeleted ? extractFirstUrl(message.content) : null;
-              const canEdit = isOwn && !isDeleted && message.attachments.length === 0 && Boolean(message.content);
-              const canDelete = isOwn && !isDeleted;
-              const canCopy = !isDeleted && Boolean(message.content);
-              const hasCode = !isDeleted && Boolean(message.content?.includes("```"));
-
-              return (
-                <motion.div
-                  key={message.id}
-                  initial={{ opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.2, ease: "easeOut" }}
-                  className={cn(
-                    "flex w-full min-w-0 flex-col",
-                    isOwn ? "items-end" : "items-start",
-                  )}
-                >
-                  {isEditing ? (
-                    <div className="flex w-full max-w-[85%] min-w-0 flex-col gap-1.5 sm:max-w-md">
-                      <Textarea
-                        value={editDraft}
-                        onChange={(e) => setEditDraft(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && !e.shiftKey) {
-                            e.preventDefault();
-                            handleSaveEdit();
-                          }
-                          if (e.key === "Escape") {
-                            handleCancelEdit();
-                          }
-                        }}
-                        autoFocus
-                        className="min-h-16 resize-none text-sm"
-                      />
-                      <div className="flex justify-end gap-1">
-                        <Button
-                          type="button"
-                          size="icon-sm"
-                          variant="ghost"
-                          onClick={handleCancelEdit}
-                          aria-label="Cancelar edición"
-                        >
-                          <X />
-                        </Button>
-                        <Button
-                          type="button"
-                          size="icon-sm"
-                          onClick={handleSaveEdit}
-                          disabled={isSavingEdit || !editDraft.trim()}
-                          aria-label="Guardar edición"
-                        >
-                          {isSavingEdit ? <Loader2 className="animate-spin" /> : <Check />}
-                        </Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <MessageContextMenu
-                      canCopy={canCopy}
-                      canEdit={canEdit}
-                      canDelete={canDelete}
-                      onCopy={() => message.content && handleCopyMessage(message.content)}
-                      onEdit={() => handleStartEdit(message)}
-                      onDelete={() => handleDeleteMessage(message.id)}
-                    >
-                      <div
-                        className={cn(
-                          "max-w-[85%] min-w-0 rounded-2xl px-3.5 py-2 text-sm wrap-anywhere whitespace-pre-wrap sm:max-w-md",
-                          hasCode && "sm:max-w-lg",
-                          isOwn
-                            ? "bg-primary text-primary-foreground"
-                            : "bg-muted text-foreground",
-                          message.content || isDeleted ? "" : "bg-transparent p-0",
-                          isDeleted && "italic opacity-70",
-                        )}
-                      >
-                        {isDeleted ? (
-                          "Mensaje eliminado"
-                        ) : message.content ? (
-                          <MessageContent content={message.content} isOwn={isOwn} />
-                        ) : null}
-                        {!isDeleted && message.editedAt && (
-                          <span className="ml-1.5 text-[10px] opacity-70">(editado)</span>
-                        )}
-                      </div>
-                    </MessageContextMenu>
-                  )}
-                  {previewUrl && <LinkPreviewCard url={previewUrl} />}
-                  {message.attachments.map((attachment) => (
-                    <MessageAttachment key={attachment.id} attachment={attachment} />
-                  ))}
-                  <MessageTimestamp date={message.createdAt} />
-                </motion.div>
-              );
-            })}
-          </AnimatePresence>
-          <AnimatePresence>
-            {isOtherUserTyping && (
-              <motion.div
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 8 }}
-                transition={{ duration: 0.15 }}
-                className="flex items-start"
-              >
-                <div className="flex items-center rounded-2xl bg-muted px-3.5 py-2.5">
-                  <TypingIndicator className="text-muted-foreground" />
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-          <div ref={bottomRef} />
+          {messages.map((message, index) => {
+            const isOwn = message.senderId === currentUser.userId;
+            const prev = messages[index - 1];
+            const senderLabel =
+              isGroup && !isOwn && !message.kind && (prev?.senderId !== message.senderId || prev?.kind)
+                ? (memberNames.get(message.senderId) ?? message.sender.username)
+                : null;
+            return (
+              <MessageItem
+                key={message.id}
+                message={message}
+                isOwn={isOwn}
+                senderLabel={senderLabel}
+                isEditing={editingMessageId === message.id}
+                isHighlighted={message.id === highlightMessageId}
+                onCopy={handleCopyMessage}
+                onStartEdit={handleStartEdit}
+                onCancelEdit={handleCancelEdit}
+                onSaveEdit={handleSaveEdit}
+                onDelete={handleDeleteMessage}
+              />
+            );
+          })}
+          {isSomeoneTyping && (
+            <div className="message-in flex flex-col items-start gap-0.5">
+              {typingLabel && (
+                <span className="px-1 text-[11px] text-muted-foreground">{typingLabel}</span>
+              )}
+              <div className="flex items-center rounded-2xl bg-muted px-3.5 py-2.5">
+                <TypingIndicator className="text-muted-foreground" />
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -675,86 +516,30 @@ export function ChatWindow({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            className="absolute inset-0 z-10 flex items-center justify-center bg-primary/15 p-6 backdrop-blur-sm"
+            className="absolute inset-0 z-10 flex items-center justify-center bg-primary/15 p-6"
           >
-            <motion.div
-              initial={{ opacity: 0, scale: 0.92, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.92, y: 10 }}
-              transition={{ duration: 0.2, ease: "easeOut" }}
-              className="flex h-full w-full flex-col items-center justify-center gap-4 rounded-2xl border-4 border-dashed border-primary bg-background/80 px-8 py-10 text-center"
-            >
-              <motion.div
-                animate={{ y: [0, -8, 0] }}
-                transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut" }}
-                className="flex size-16 items-center justify-center rounded-full bg-primary/15 text-primary"
-              >
+            <div className="flex h-full w-full flex-col items-center justify-center gap-4 rounded-2xl border-4 border-dashed border-primary bg-background/90 px-8 py-10 text-center">
+              <div className="flex size-16 items-center justify-center rounded-full bg-primary/15 text-primary">
                 <UploadCloud className="size-8" />
-              </motion.div>
+              </div>
               <div className="flex flex-col gap-1">
                 <p className="text-lg font-semibold text-primary">Suelta tu archivo aquí</p>
                 <p className="text-sm text-muted-foreground">
                   Lo enviaremos directo a esta conversación
                 </p>
               </div>
-            </motion.div>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      <div className="border-t p-3">
-        <AttachmentComposer
-          attachments={pendingAttachments}
-          onRemove={removePending}
-          onReplace={replacePending}
-          disabled={isUploading}
-        />
-        <div className="flex items-end gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={open}
-            disabled={isUploading}
-            aria-label="Adjuntar archivo"
-          >
-            {isUploading ? <Loader2 className="animate-spin" /> : <Paperclip />}
-          </Button>
-          <Textarea
-            value={draft}
-            onChange={(e) => {
-              setDraft(e.target.value);
-              if (e.target.value.trim()) notifyTyping();
-            }}
-            onPaste={handlePaste}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            placeholder={
-              pendingAttachments.length > 0
-                ? "Añade un comentario (opcional)..."
-                : "Escribe un mensaje..."
-            }
-            className="max-h-32 min-h-8 flex-1 resize-none"
-          />
-          <Button
-            type="button"
-            size="icon"
-            onClick={handleSend}
-            disabled={
-              isSending ||
-              isUploading ||
-              (pendingAttachments.length === 0 && !draft.trim())
-            }
-            aria-label="Enviar mensaje"
-          >
-            {isSending || isUploading ? <Loader2 className="animate-spin" /> : <Send />}
-          </Button>
-        </div>
-      </div>
+      <MessageComposer
+        ref={composerRef}
+        conversationId={conversationId}
+        onSendText={handleSendText}
+        onAttachmentsSent={appendLocalMessage}
+        onTyping={notifyTyping}
+      />
     </div>
   );
 }

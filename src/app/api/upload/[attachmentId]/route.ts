@@ -36,9 +36,14 @@ export async function GET(
     return NextResponse.json({ error: "No tienes acceso a este archivo" }, { status: 403 });
   }
 
+  const wantsDownload = request.nextUrl.searchParams.get("download") === "1";
+
   let url: string;
   try {
-    url = await getSignedDownloadUrl(attachment.storagePath);
+    url = await getSignedDownloadUrl(
+      attachment.storagePath,
+      wantsDownload ? { downloadFileName: attachment.fileName } : undefined,
+    );
   } catch {
     return NextResponse.json({ error: "Error generando la URL de descarga" }, { status: 500 });
   }

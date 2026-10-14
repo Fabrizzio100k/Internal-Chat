@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { memo, useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
-import { LogOut, Search, UserPlus, Check, X, LayoutGrid } from "lucide-react";
+import { LogOut, Search, UserPlus, Check, X, LayoutGrid, Users, UsersRound } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +16,9 @@ import { cn } from "@/lib/utils";
 import { formatUnreadCount } from "@/lib/format";
 import {
   searchUsersAction,
+  getConversationItemAction,
+  listConversationsAction,
+  listPendingRequestsAction,
   sendChatRequestAction,
   acceptChatRequestAction,
   rejectChatRequestAction,
@@ -30,11 +33,16 @@ import { useTypingStatusForConversations } from "@/hooks/use-typing";
 import { PresenceDot } from "@/components/chat/presence-dot";
 import { TypingIndicator } from "@/components/chat/typing-indicator";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { useInboxHandler } from "@/hooks/use-inbox";
+import { CreateGroupDialog } from "@/components/chat/create-group-dialog";
+import { ChatSearchDialog } from "@/components/chat/chat-search-dialog";
 
 type ConversationItem = {
   id: string;
-  otherUser: { id: string; username: string };
+  isGroup: boolean;
+  title: string;
+  otherUser: { id: string; username: string } | null;
+  members: { id: string; username: string }[];
   lastMessage: { content: string | null; createdAt: Date } | null;
   unreadCount: number;
 };
@@ -46,6 +54,77 @@ type PendingRequestItem = {
 };
 
 type SessionUser = { userId: string; username: string };
+
+/**
+ * Fila de conversación memoizada: la presencia, el "escribiendo" o un mensaje
+ * nuevo en OTRA conversación ya no re-renderizan todas las filas.
+ */
+const ConversationRow = memo(function ConversationRow({
+  conversation,
+  isActive,
+  isOnline,
+  isTyping,
+  onOpen,
+}: {
+  conversation: ConversationItem;
+  isActive: boolean;
+  isOnline: boolean;
+  isTyping: boolean;
+  onOpen: (id: string) => void;
+}) {
+  const unreadLabel = formatUnreadCount(isActive ? 0 : conversation.unreadCount);
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(conversation.id)}
+      className={cn(
+        "flex items-center gap-2.5 rounded-lg p-2 text-left transition-colors hover:bg-muted",
+        isActive && "bg-muted",
+      )}
+    >
+      <div className="relative">
+        <Avatar>
+          <AvatarFallback>
+            {conversation.isGroup ? (
+              <Users className="size-4" />
+            ) : (
+              conversation.title.slice(0, 2).toUpperCase()
+            )}
+          </AvatarFallback>
+        </Avatar>
+        {!conversation.isGroup && (
+          <PresenceDot online={isOnline} className="absolute -right-0.5 -bottom-0.5" />
+        )}
+      </div>
+      <div className="flex flex-1 flex-col overflow-hidden">
+        <span className={cn("truncate text-sm", unreadLabel ? "font-semibold" : "font-medium")}>
+          {conversation.title}
+        </span>
+        {isTyping ? (
+          <span className="flex items-center gap-1 text-xs font-medium text-primary">
+            Escribiendo
+            <TypingIndicator size="sm" />
+          </span>
+        ) : (
+          <span
+            className={cn(
+              "truncate text-xs",
+              unreadLabel ? "font-medium text-foreground" : "text-muted-foreground",
+            )}
+          >
+            {conversation.lastMessage?.content ??
+              (conversation.lastMessage ? "Archivo adjunto" : "Sin mensajes aún")}
+          </span>
+        )}
+      </div>
+      {unreadLabel && (
+        <Badge className="h-5 min-w-5 shrink-0 justify-center rounded-full px-1.5 text-[10px]">
+          {unreadLabel}
+        </Badge>
+      )}
+    </button>
+  );
+});
 
 export function ChatSidebar({
   currentUser,
@@ -64,6 +143,8 @@ export function ChatSidebar({
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<{ id: string; username: string }[]>([]);
   const [isSearching, startSearchTransition] = useTransition();
+  const [isGroupOpen, setIsGroupOpen] = useState(false);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [, startTransition] = useTransition();
   const { onlineUserIds } = usePresence();
   const { setTotalUnread } = useUnreadTotal();
@@ -98,46 +179,97 @@ export function ChatSidebar({
   // Si el mensaje es de otra persona y esa conversación no está abierta
   // actualmente, incrementamos su contador local y subimos esa conversación
   // al tope de la lista con el nuevo último mensaje.
+  const activeConversationIdRef = useRef(activeConversationId);
+  const knownConversationIdsRef = useRef(new Set(initialConversations.map((c) => c.id)));
   useEffect(() => {
-    const supabase = createSupabaseBrowserClient();
-    const channel = supabase
-      .channel("sidebar:messages")
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "messages" },
-        (payload) => {
-          const newMessage = payload.new as {
-            id: string;
-            conversationId: string;
-            senderId: string;
-            content: string | null;
-            createdAt: string;
+    activeConversationIdRef.current = activeConversationId;
+  }, [activeConversationId]);
+  useEffect(() => {
+    knownConversationIdsRef.current = new Set(conversations.map((c) => c.id));
+  }, [conversations]);
+
+  const inflightItemsRef = useRef(new Set<string>());
+  const refreshItem = useCallback((conversationId: string) => {
+    if (inflightItemsRef.current.has(conversationId)) return;
+    inflightItemsRef.current.add(conversationId);
+    getConversationItemAction(conversationId)
+      .then((item) => {
+        if (!item) return;
+        setConversations((prev) => [item, ...prev.filter((c) => c.id !== item.id)]);
+      })
+      .catch(() => {})
+      .finally(() => inflightItemsRef.current.delete(conversationId));
+  }, []);
+
+  // Eventos en vivo del inbox privado: solo llegan los de MIS conversaciones.
+  useInboxHandler((event) => {
+    switch (event.type) {
+      case "message": {
+        const m = event.message;
+        const known = knownConversationIdsRef.current.has(m.conversationId);
+
+        if (m.kind) {
+          const isRemoval = m.kind === "member_removed" || m.kind === "member_left";
+          if (isRemoval && m.targetUserIds.includes(currentUser.userId)) {
+            // Me sacaron (o salí desde otra pestaña): el chat desaparece de mi lista.
+            setConversations((prev) => prev.filter((c) => c.id !== m.conversationId));
+            if (activeConversationIdRef.current === m.conversationId) router.replace("/chat");
+            return;
+          }
+          // Grupo nuevo, me añadieron, renombrado o cambió la membresía: refrescar la fila.
+          refreshItem(m.conversationId);
+          return;
+        }
+
+        // Conversación que aún no conozco (p. ej. me aceptaron una solicitud): cargarla.
+        if (!known) {
+          refreshItem(m.conversationId);
+          return;
+        }
+
+        const isFromMe = m.senderId === currentUser.userId;
+        const isOpen = m.conversationId === activeConversationIdRef.current;
+        setConversations((prev) => {
+          const index = prev.findIndex((c) => c.id === m.conversationId);
+          if (index === -1) return prev;
+          const updated = {
+            ...prev[index],
+            lastMessage: { content: m.content, createdAt: new Date(m.createdAt) },
+            unreadCount: isFromMe || isOpen ? prev[index].unreadCount : prev[index].unreadCount + 1,
           };
+          return [updated, ...prev.filter((_, i) => i !== index)];
+        });
+        return;
+      }
+      case "conversation_added":
+        refreshItem(event.conversationId);
+        return;
+      case "request_received":
+        listPendingRequestsAction()
+          .then(setPendingRequests)
+          .catch(() => {});
+        return;
+      case "resync":
+        // Reconexión: pudimos perder eventos; recarga ambas listas.
+        listConversationsAction()
+          .then(setConversations)
+          .catch(() => {});
+        listPendingRequestsAction()
+          .then(setPendingRequests)
+          .catch(() => {});
+        return;
+      default:
+        return;
+    }
+  });
 
-          if (newMessage.senderId === currentUser.userId) return;
-
-          setConversations((prev) => {
-            const index = prev.findIndex((c) => c.id === newMessage.conversationId);
-            if (index === -1) return prev;
-
-            const isOpen = newMessage.conversationId === activeConversationId;
-            const updated = {
-              ...prev[index],
-              lastMessage: { content: newMessage.content, createdAt: new Date(newMessage.createdAt) },
-              unreadCount: isOpen ? 0 : prev[index].unreadCount + 1,
-            };
-
-            const rest = prev.filter((_, i) => i !== index);
-            return [updated, ...rest];
-          });
-        },
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [currentUser.userId, activeConversationId]);
+  const openConversation = useCallback(
+    (id: string) => {
+      router.push(`/chat/${id}`);
+      close();
+    },
+    [router, close],
+  );
 
   const handleSearch = (value: string) => {
     setSearchQuery(value);
@@ -194,7 +326,10 @@ export function ChatSidebar({
         setConversations((prev) => [
           {
             id: result.conversationId!,
+            isGroup: false,
+            title: request.fromUser.username,
             otherUser: request.fromUser,
+            members: [{ id: currentUser.userId, username: currentUser.username }, request.fromUser],
             lastMessage: null,
             unreadCount: 0,
           },
@@ -237,7 +372,7 @@ export function ChatSidebar({
 
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-50 flex h-full w-72 flex-col border-r bg-background transition-transform duration-200 ease-out",
+          "fixed inset-y-0 left-0 z-50 flex h-full w-72 flex-col border-r bg-background pb-[env(safe-area-inset-bottom)] transition-transform duration-200 ease-out will-change-transform",
           "md:relative md:z-auto md:w-80 md:translate-x-0 md:bg-muted/30",
           isOpen ? "translate-x-0" : "-translate-x-full",
         )}
@@ -256,6 +391,22 @@ export function ChatSidebar({
           </div>
         </div>
         <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Buscar mensajes y archivos"
+            onClick={() => setIsSearchOpen(true)}
+          >
+            <Search />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Crear grupo"
+            onClick={() => setIsGroupOpen(true)}
+          >
+            <UsersRound />
+          </Button>
           <Button
             variant="ghost"
             size="icon-sm"
@@ -368,75 +519,18 @@ export function ChatSidebar({
                   Aún no tienes conversaciones. Busca un usuario para empezar.
                 </p>
               )}
-              {conversations.map((conversation) => {
-                const isActive = params?.conversationId === conversation.id;
-                const isOnline = onlineUserIds.has(conversation.otherUser.id);
-                const effectiveUnreadCount = isActive ? 0 : conversation.unreadCount;
-                const unreadLabel = formatUnreadCount(effectiveUnreadCount);
-                const isTyping = typingConversationIds.has(conversation.id);
-                return (
-                  <button
-                    key={conversation.id}
-                    onClick={() => {
-                      router.push(`/chat/${conversation.id}`);
-                      close();
-                    }}
-                    className={cn(
-                      "flex items-center gap-2.5 rounded-lg p-2 text-left transition-colors hover:bg-muted",
-                      isActive && "bg-muted",
-                    )}
-                  >
-                    <div className="relative">
-                      <Avatar>
-                        <AvatarFallback>
-                          {conversation.otherUser.username.slice(0, 2).toUpperCase()}
-                        </AvatarFallback>
-                      </Avatar>
-                      <PresenceDot online={isOnline} className="absolute -right-0.5 -bottom-0.5" />
-                    </div>
-                    <div className="flex flex-1 flex-col overflow-hidden">
-                      <span
-                        className={cn(
-                          "truncate text-sm",
-                          unreadLabel ? "font-semibold" : "font-medium",
-                        )}
-                      >
-                        {conversation.otherUser.username}
-                      </span>
-                      {isTyping ? (
-                        <span className="flex items-center gap-1 text-xs font-medium text-primary">
-                          Escribiendo
-                          <TypingIndicator size="sm" />
-                        </span>
-                      ) : (
-                        <span
-                          className={cn(
-                            "truncate text-xs",
-                            unreadLabel ? "font-medium text-foreground" : "text-muted-foreground",
-                          )}
-                        >
-                          {conversation.lastMessage?.content ??
-                            (conversation.lastMessage ? "Archivo adjunto" : "Sin mensajes aún")}
-                        </span>
-                      )}
-                    </div>
-                    <AnimatePresence>
-                      {unreadLabel && (
-                        <motion.div
-                          initial={{ opacity: 0, scale: 0.5 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          exit={{ opacity: 0, scale: 0.5 }}
-                          transition={{ duration: 0.15 }}
-                        >
-                          <Badge className="h-5 min-w-5 shrink-0 justify-center rounded-full px-1.5 text-[10px]">
-                            {unreadLabel}
-                          </Badge>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </button>
-                );
-              })}
+              {conversations.map((conversation) => (
+                <ConversationRow
+                  key={conversation.id}
+                  conversation={conversation}
+                  isActive={activeConversationId === conversation.id}
+                  isOnline={
+                    conversation.otherUser ? onlineUserIds.has(conversation.otherUser.id) : false
+                  }
+                  isTyping={typingConversationIds.has(conversation.id)}
+                  onOpen={openConversation}
+                />
+              ))}
             </div>
           </ScrollArea>
         </TabsContent>
@@ -492,6 +586,26 @@ export function ChatSidebar({
         </TabsContent>
       </Tabs>
       </aside>
+
+      <CreateGroupDialog
+        open={isGroupOpen}
+        onOpenChange={setIsGroupOpen}
+        currentUser={currentUser}
+        onCreated={(conversation) => {
+          setConversations((prev) => [conversation, ...prev]);
+          openConversation(conversation.id);
+        }}
+      />
+      <ChatSearchDialog
+        open={isSearchOpen}
+        onOpenChange={setIsSearchOpen}
+        activeConversationId={activeConversationId}
+        onSelect={(conversationId, messageId) => {
+          setIsSearchOpen(false);
+          router.push(`/chat/${conversationId}?m=${encodeURIComponent(messageId)}`);
+          close();
+        }}
+      />
     </>
   );
 }

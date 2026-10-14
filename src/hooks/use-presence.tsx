@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 
@@ -126,11 +126,12 @@ export function PresenceProvider({
     };
   }, [currentUserId]);
 
-  return (
-    <PresenceContext.Provider value={{ onlineUserIds, isRealtimeConnected }}>
-      {children}
-    </PresenceContext.Provider>
+  const value = useMemo(
+    () => ({ onlineUserIds, isRealtimeConnected }),
+    [onlineUserIds, isRealtimeConnected],
   );
+
+  return <PresenceContext.Provider value={value}>{children}</PresenceContext.Provider>;
 }
 
 /** Devuelve el Set de userId conectados y si el canal de Realtime está activo. */

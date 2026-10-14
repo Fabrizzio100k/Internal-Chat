@@ -2,14 +2,14 @@
 
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/auth";
-import { revalidatePath } from "next/cache";
 import {
-  MESSAGES_PAGE_SIZE,
   type ListMessagesResult,
   type SendMessageResult,
   type EditMessageResult,
   type DeleteMessageResult,
 } from "@/lib/types/messages";
+import { listMessagesPageUnchecked, MESSAGE_INCLUDE } from "@/lib/messages-server";
+import { publishToConversation, toRealtimeMessage } from "@/lib/realtime-server";
 import { checkRateLimit } from "@/lib/rate-limit";
 
 // Spam de mensajes: máximo 20 mensajes por minuto por IP.
@@ -36,21 +36,6 @@ async function assertParticipant(conversationId: string, userId: string) {
   return participation;
 }
 
-async function fetchMessagesPage(conversationId: string, cursor?: string, limit = MESSAGES_PAGE_SIZE) {
-  return prisma.message.findMany({
-    where: {
-      conversationId,
-      ...(cursor ? { createdAt: { lt: new Date(cursor) } } : {}),
-    },
-    include: {
-      sender: { select: { id: true, username: true } },
-      attachments: true,
-    },
-    orderBy: { createdAt: "desc" },
-    take: limit + 1,
-  });
-}
-
 /**
  * Lista el historial de mensajes de una conversación, paginado.
  * Sin `cursor`: devuelve los MESSAGES_PAGE_SIZE (50) mensajes más recientes.
@@ -65,26 +50,6 @@ export async function listMessagesAction(
   const session = await requireSession();
   await assertParticipant(conversationId, session.userId);
   return listMessagesPageUnchecked(conversationId, cursor);
-}
-
-/**
- * Igual que listMessagesAction pero sin repetir la validación de pertenencia.
- * Solo debe llamarse desde código server-side que YA validó que el usuario
- * pertenece a la conversación (p. ej. la página de conversación, que necesita
- * los datos de la conversación de todos modos para mostrar el otro usuario).
- */
-export async function listMessagesPageUnchecked(
-  conversationId: string,
-  cursor?: string,
-): Promise<ListMessagesResult> {
-  const page = await fetchMessagesPage(conversationId, cursor);
-  const hasMore = page.length > MESSAGES_PAGE_SIZE;
-  const trimmed = hasMore ? page.slice(0, MESSAGES_PAGE_SIZE) : page;
-
-  return {
-    messages: trimmed.reverse(),
-    hasMore,
-  };
 }
 
 /** Envía un mensaje de texto a una conversación. La notificación en vivo la hace Supabase Realtime. */
@@ -121,9 +86,15 @@ export async function sendMessageAction(
       senderId: session.userId,
       content: trimmed,
     },
+    include: MESSAGE_INCLUDE,
   });
 
-  revalidatePath(`/chat/${conversationId}`);
+  // Tiempo real: se publica a los participantes después de responder (after()).
+  publishToConversation(conversationId, {
+    type: "message",
+    message: toRealtimeMessage(message),
+  });
+
   return { success: true, messageId: message.id };
 }
 
@@ -143,7 +114,7 @@ export async function editMessageAction(
     where: { id: messageId },
     include: { attachments: { select: { id: true } } },
   });
-  if (!message || message.deletedAt) {
+  if (!message || message.deletedAt || message.kind) {
     return { success: false, error: "El mensaje no existe" };
   }
   if (message.senderId !== session.userId) {
@@ -161,12 +132,20 @@ export async function editMessageAction(
     return { success: false, error: "El mensaje es demasiado largo" };
   }
 
+  const editedAt = new Date();
   await prisma.message.update({
     where: { id: messageId },
-    data: { content: trimmed, editedAt: new Date() },
+    data: { content: trimmed, editedAt },
   });
 
-  revalidatePath(`/chat/${message.conversationId}`);
+  publishToConversation(message.conversationId, {
+    type: "message_updated",
+    conversationId: message.conversationId,
+    messageId,
+    content: trimmed,
+    editedAt: editedAt.toISOString(),
+  });
+
   return { success: true };
 }
 
@@ -180,18 +159,25 @@ export async function deleteMessageAction(messageId: string): Promise<DeleteMess
   const session = await requireSession();
 
   const message = await prisma.message.findUnique({ where: { id: messageId } });
-  if (!message || message.deletedAt) {
+  if (!message || message.deletedAt || message.kind) {
     return { success: false, error: "El mensaje no existe" };
   }
   if (message.senderId !== session.userId) {
     return { success: false, error: "No puedes eliminar este mensaje" };
   }
 
+  const deletedAt = new Date();
   await prisma.message.update({
     where: { id: messageId },
-    data: { content: null, deletedAt: new Date() },
+    data: { content: null, deletedAt },
   });
 
-  revalidatePath(`/chat/${message.conversationId}`);
+  publishToConversation(message.conversationId, {
+    type: "message_deleted",
+    conversationId: message.conversationId,
+    messageId,
+    deletedAt: deletedAt.toISOString(),
+  });
+
   return { success: true };
 }

@@ -40,10 +40,28 @@ function getS3Client(): S3Client {
  * bucket. Equivalente a `createSignedUrl` de Supabase Storage: el objeto
  * sigue siendo privado, la URL solo es válida por un tiempo limitado.
  */
-export async function getSignedDownloadUrl(key: string): Promise<string> {
+export async function getSignedDownloadUrl(
+  key: string,
+  options?: { downloadFileName?: string },
+): Promise<string> {
   const client = getS3Client();
-  const command = new GetObjectCommand({ Bucket: getBucketName(), Key: key });
+  // Con downloadFileName, S3 responde con Content-Disposition: attachment y el
+  // nombre ORIGINAL del archivo. El atributo `download` del <a> se ignora en
+  // URLs de otro origen (S3), por eso el nombre debe ir en la propia respuesta.
+  const command = new GetObjectCommand({
+    Bucket: getBucketName(),
+    Key: key,
+    ...(options?.downloadFileName
+      ? { ResponseContentDisposition: buildContentDisposition(options.downloadFileName) }
+      : {}),
+  });
   return getSignedUrl(client, command, { expiresIn: SIGNED_URL_EXPIRY_SECONDS });
+}
+
+function buildContentDisposition(fileName: string): string {
+  const clean = fileName.replace(/[\r\n"]/g, "_");
+  const asciiFallback = clean.replace(/[^\x20-\x7E]/g, "_");
+  return `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(clean)}`;
 }
 
 /**

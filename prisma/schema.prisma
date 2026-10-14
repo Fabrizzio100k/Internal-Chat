@@ -8,6 +8,11 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+enum ParticipantRole {
+  MEMBER
+  ADMIN
+}
+
 enum ChatRequestStatus {
   PENDING
   ACCEPTED
@@ -48,6 +53,10 @@ model ChatRequest {
 model Conversation {
   id        String   @id @default(cuid())
   createdAt DateTime @default(now())
+  // false = chat 1:1 (name null). true = grupo con nombre.
+  isGroup     Boolean  @default(false)
+  name        String?
+  createdById String?
 
   participants ConversationParticipant[]
   messages     Message[]
@@ -71,6 +80,7 @@ model ConversationParticipant {
   userId         String
   lastReadAt     DateTime?
   joinedAt       DateTime     @default(now())
+  role           ParticipantRole @default(MEMBER)
 
   @@unique([conversationId, userId])
   @@index([userId])
@@ -87,10 +97,16 @@ model Message {
   createdAt      DateTime     @default(now())
   editedAt       DateTime?
   deletedAt      DateTime?
+  // Mensajes de sistema de grupos (kind != null): "group_created", "member_added",
+  // "member_removed", "member_left", "group_renamed". targetUserIds = usuarios
+  // afectados; el sidebar en tiempo real lo usa para añadir/quitar el chat.
+  kind           String?
+  targetUserIds  String[]     @default([])
 
   attachments Attachment[]
 
   @@index([conversationId, createdAt])
+  @@index([content(ops: raw("gin_trgm_ops"))], type: Gin)
   @@map("messages")
 }
 
@@ -105,6 +121,9 @@ model Attachment {
   fileSize   Int
   storagePath String
   createdAt  DateTime @default(now())
+
+  @@index([messageId])
+  @@index([fileName(ops: raw("gin_trgm_ops"))], type: Gin)
 
   @@map("attachments")
 }

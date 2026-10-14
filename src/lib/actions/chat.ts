@@ -2,9 +2,15 @@
 
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/auth";
-import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/lib/types/chat";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { loadContacts, loadConversationItems } from "@/lib/conversations-server";
+import { MESSAGE_INCLUDE } from "@/lib/messages-server";
+import {
+  publishToConversation,
+  publishToUsersAfter,
+  toRealtimeMessage,
+} from "@/lib/realtime-server";
 
 // Spam de solicitudes de chat: máximo 10 solicitudes por hora por IP.
 const CHAT_REQUEST_RATE_LIMIT = 10;
@@ -66,6 +72,7 @@ export async function sendChatRequestAction(toUserId: string): Promise<ActionRes
   // Si ya existe una conversación entre ambos, no tiene sentido otra solicitud.
   const existingConversation = await prisma.conversation.findFirst({
     where: {
+      isGroup: false,
       AND: [
         { participants: { some: { userId: session.userId } } },
         { participants: { some: { userId: toUserId } } },
@@ -92,8 +99,9 @@ export async function sendChatRequestAction(toUserId: string): Promise<ActionRes
   await prisma.chatRequest.create({
     data: { fromUserId: session.userId, toUserId },
   });
+  publishToUsersAfter([toUserId], { type: "request_received" });
 
-  revalidatePath("/chat");
+
   return { success: true };
 }
 
@@ -127,7 +135,12 @@ export async function acceptChatRequestAction(requestId: string): Promise<Action
     return newConversation;
   });
 
-  revalidatePath("/chat");
+  publishToUsersAfter([request.fromUserId], {
+    type: "conversation_added",
+    conversationId: conversation.id,
+  });
+
+
   return { success: true, conversationId: conversation.id };
 }
 
@@ -148,7 +161,7 @@ export async function rejectChatRequestAction(requestId: string): Promise<Action
     data: { status: "REJECTED" },
   });
 
-  revalidatePath("/chat");
+
   return { success: true };
 }
 
@@ -161,97 +174,105 @@ export async function listPendingRequestsAction() {
     include: { fromUser: { select: { id: true, username: true } } },
     orderBy: { createdAt: "desc" },
   });
+
+
 }
 
-/**
- * Lista las conversaciones del usuario actual, con el último mensaje y el
- * conteo de mensajes no leídos (mensajes de la conversación creados después
- * de mi lastReadAt y que no envié yo mismo).
- *
- * El conteo de no leídos se resuelve con una sola query SQL agregada (en vez
- * de un `message.count` por conversación dentro de un Promise.all, que era
- * un round-trip a la base de datos por cada conversación del usuario). No se
- * puede hacer con `prisma.message.groupBy` porque el filtro de fecha
- * (`createdAt > lastReadAt`) es distinto para cada conversación —cada
- * participación tiene su propio `lastReadAt`— y groupBy no soporta comparar
- * contra un valor por-fila, solo contra constantes.
- */
+/** Lista las conversaciones del usuario actual (último mensaje + no leídos). */
 export async function listConversationsAction() {
   const session = await requireSession();
+  return loadConversationItems(session.userId);
+}
 
-  const myParticipations = await prisma.conversationParticipant.findMany({
-    where: { userId: session.userId },
-    include: {
-      conversation: {
-        include: {
-          participants: {
-            include: { user: { select: { id: true, username: true } } },
-          },
-          messages: {
-            orderBy: { createdAt: "desc" },
-            take: 1,
-          },
-        },
-      },
-    },
-    orderBy: { conversation: { createdAt: "desc" } },
-  });
-
-  if (myParticipations.length === 0) {
-    return [];
-  }
-
-  const conversationIds = myParticipations.map((p) => p.conversationId);
-
-  const unreadCounts = await prisma.$queryRaw<{ conversationId: string; unreadCount: bigint }[]>`
-    SELECT m."conversationId" AS "conversationId", COUNT(*) AS "unreadCount"
-    FROM messages m
-    INNER JOIN conversation_participants cp
-      ON cp."conversationId" = m."conversationId"
-      AND cp."userId" = ${session.userId}
-    WHERE m."conversationId" = ANY(${conversationIds})
-      AND m."senderId" != ${session.userId}
-      AND (cp."lastReadAt" IS NULL OR m."createdAt" > cp."lastReadAt")
-    GROUP BY m."conversationId"
-  `;
-
-  const unreadCountByConversationId = new Map(
-    unreadCounts.map((row) => [row.conversationId, Number(row.unreadCount)]),
-  );
-
-  return myParticipations.map((participation) => {
-    const { conversation } = participation;
-    const otherParticipant = conversation.participants.find((p) => p.userId !== session.userId);
-
-    return {
-      id: conversation.id,
-      otherUser: otherParticipant?.user ?? { id: "", username: "Usuario" },
-      lastMessage: conversation.messages[0] ?? null,
-      unreadCount: unreadCountByConversationId.get(conversation.id) ?? 0,
-    };
-  });
+/** Una sola conversación (para el sidebar en tiempo real). null si no es miembro. */
+export async function getConversationItemAction(conversationId: string) {
+  const session = await requireSession();
+  const [item] = await loadConversationItems(session.userId, conversationId);
+  return item ?? null;
 }
 
 /**
- * Marca una conversación como leída para el usuario actual, actualizando
- * su lastReadAt en ConversationParticipant al momento actual. Debe llamarse
- * al abrir/entrar a la conversación.
+ * Contactos del usuario: personas con las que ya tiene un chat 1:1. Solo ellas
+ * se pueden añadir a un grupo (nadie te mete a un grupo sin conexión previa).
  */
+export async function listContactsAction() {
+  const session = await requireSession();
+  return loadContacts(session.userId);
+}
+
+const GROUP_NAME_MAX = 60;
+const GROUP_MAX_MEMBERS = 50;
+
+/** Crea un grupo: el creador es ADMIN. Emite un mensaje de sistema en tiempo real. */
+export async function createGroupAction(name: string, memberIds: string[]): Promise<ActionResult> {
+  const session = await requireSession();
+
+  const trimmedName = name.trim();
+  if (!trimmedName) return { success: false, error: "El grupo necesita un nombre" };
+  if (trimmedName.length > GROUP_NAME_MAX) {
+    return { success: false, error: `El nombre no puede superar ${GROUP_NAME_MAX} caracteres` };
+  }
+
+  const uniqueIds = [...new Set(memberIds)].filter((id) => id !== session.userId);
+  if (uniqueIds.length === 0) return { success: false, error: "Elige al menos un participante" };
+  if (uniqueIds.length + 1 > GROUP_MAX_MEMBERS) {
+    return { success: false, error: `Máximo ${GROUP_MAX_MEMBERS} participantes` };
+  }
+
+  const allowed = new Set((await loadContacts(session.userId)).map((c) => c.id));
+  if (uniqueIds.some((id) => !allowed.has(id))) {
+    return { success: false, error: "Solo puedes añadir a personas con las que ya chateas" };
+  }
+
+  const conversation = await prisma.$transaction(async (tx) => {
+    const created = await tx.conversation.create({
+      data: {
+        isGroup: true,
+        name: trimmedName,
+        createdById: session.userId,
+        participants: {
+          create: [
+            { userId: session.userId, role: "ADMIN" as const },
+            ...uniqueIds.map((userId) => ({ userId })),
+          ],
+        },
+      },
+      select: { id: true },
+    });
+    // Un solo mensaje de sistema; targetUserIds avisa a TODOS los miembros
+    // (sus sidebars lo reciben por Realtime y añaden el grupo al instante).
+    const systemMessage = await tx.message.create({
+      data: {
+        conversationId: created.id,
+        senderId: session.userId,
+        content: `${session.username} creó el grupo "${trimmedName}"`,
+        kind: "group_created",
+        targetUserIds: [session.userId, ...uniqueIds],
+      },
+      include: MESSAGE_INCLUDE,
+    });
+    return { id: created.id, systemMessage };
+  });
+
+  publishToConversation(conversation.id, {
+    type: "message",
+    message: toRealtimeMessage(conversation.systemMessage),
+  });
+
+  return { success: true, conversationId: conversation.id };
+}
+
+/** Marca una conversación como leída (una sola query; updateMany filtra por pertenencia). */
 export async function markConversationReadAction(conversationId: string): Promise<ActionResult> {
   const session = await requireSession();
 
-  const participation = await prisma.conversationParticipant.findUnique({
-    where: { conversationId_userId: { conversationId, userId: session.userId } },
-  });
-
-  if (!participation) {
-    return { success: false, error: "No tienes acceso a esta conversación" };
-  }
-
-  await prisma.conversationParticipant.update({
-    where: { id: participation.id },
+  const result = await prisma.conversationParticipant.updateMany({
+    where: { conversationId, userId: session.userId },
     data: { lastReadAt: new Date() },
   });
 
+  if (result.count === 0) {
+    return { success: false, error: "No tienes acceso a esta conversación" };
+  }
   return { success: true };
 }

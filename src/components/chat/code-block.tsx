@@ -1,19 +1,26 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { memo, useMemo, useState } from "react";
+// Versión async: carga las gramáticas de cada lenguaje bajo demanda en vez de
+// meter TODOS los lenguajes de Prism en el bundle inicial.
+import { PrismAsyncLight as SyntaxHighlighter } from "react-syntax-highlighter";
+import oneDark from "react-syntax-highlighter/dist/esm/styles/prism/one-dark";
+import oneLight from "react-syntax-highlighter/dist/esm/styles/prism/one-light";
 import { useTheme } from "next-themes";
 import { Check, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+// Resaltar archivos enormes bloquea el hilo principal; por encima de este
+// tamaño se muestra texto plano.
+const MAX_HIGHLIGHT_CHARS = 60_000;
 
 /**
  * Bloque de código con resaltado de sintaxis. Se adapta al tema claro/oscuro
  * y muestra el lenguaje detectado y un botón para copiar. Se usa tanto en las
  * previsualizaciones de adjuntos como en los mensajes que contienen código.
  */
-export function CodeBlock({
+function CodeBlockImpl({
   code,
   language,
   fileName,
@@ -30,8 +37,8 @@ export function CodeBlock({
   const [copied, setCopied] = useState(false);
 
   const style = resolvedTheme === "dark" ? oneDark : oneLight;
-
   const lineCount = useMemo(() => code.split("\n").length, [code]);
+  const tooBig = code.length > MAX_HIGHLIGHT_CHARS;
 
   const handleCopy = () => {
     navigator.clipboard
@@ -66,23 +73,29 @@ export function CodeBlock({
         </Button>
       </div>
       <div className={cn("overflow-auto", maxHeightClass)}>
-        <SyntaxHighlighter
-          language={language}
-          style={style}
-          showLineNumbers={lineCount > 1}
-          wrapLongLines={false}
-          customStyle={{
-            margin: 0,
-            background: "transparent",
-            fontSize: "12px",
-            padding: "0.75rem",
-          }}
-          codeTagProps={{ style: { fontFamily: "var(--font-mono, ui-monospace, monospace)" } }}
-          lineNumberStyle={{ opacity: 0.4, minWidth: "2.2em" }}
-        >
-          {code}
-        </SyntaxHighlighter>
+        {tooBig ? (
+          <pre className="p-3 font-mono text-xs whitespace-pre">{code}</pre>
+        ) : (
+          <SyntaxHighlighter
+            language={language}
+            style={style}
+            showLineNumbers={lineCount > 1}
+            wrapLongLines={false}
+            customStyle={{
+              margin: 0,
+              background: "transparent",
+              fontSize: "12px",
+              padding: "0.75rem",
+            }}
+            codeTagProps={{ style: { fontFamily: "var(--font-mono, ui-monospace, monospace)" } }}
+            lineNumberStyle={{ opacity: 0.4, minWidth: "2.2em" }}
+          >
+            {code}
+          </SyntaxHighlighter>
+        )}
       </div>
     </div>
   );
 }
+
+export const CodeBlock = memo(CodeBlockImpl);
