@@ -59,6 +59,8 @@ type SearchDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   activeConversationId?: string;
+  /** Si se indica, la búsqueda queda limitada a esa conversación (búsqueda dentro del chat). */
+  scopedConversationId?: string;
   onSelect: (conversationId: string, messageId: string) => void;
 };
 
@@ -71,6 +73,7 @@ function ChatSearchDialogInner({
   open,
   onOpenChange,
   activeConversationId,
+  scopedConversationId,
   onSelect,
 }: SearchDialogProps) {
   const [query, setQuery] = useState("");
@@ -79,7 +82,7 @@ function ChatSearchDialogInner({
   const [isLoading, setIsLoading] = useState(false);
   const requestIdRef = useRef(0);
 
-  const scopeId = onlyCurrent ? activeConversationId : undefined;
+  const scopeId = scopedConversationId ?? (onlyCurrent ? activeConversationId : undefined);
   const trimmed = query.trim();
   const isSearchable = trimmed.length >= 2;
 
@@ -115,8 +118,12 @@ function ChatSearchDialogInner({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="top-[10%] flex max-h-[80dvh] translate-y-0 flex-col sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Buscar</DialogTitle>
-          <DialogDescription>Mensajes y archivos de tus conversaciones.</DialogDescription>
+          <DialogTitle>{scopedConversationId ? "Buscar en este chat" : "Buscar"}</DialogTitle>
+          <DialogDescription>
+            {scopedConversationId
+              ? "Mensajes y archivos de esta conversación."
+              : "Mensajes y archivos de tus conversaciones."}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="relative">
@@ -131,7 +138,7 @@ function ChatSearchDialogInner({
           />
         </div>
 
-        {activeConversationId && (
+        {activeConversationId && !scopedConversationId && (
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
             <input
               type="checkbox"

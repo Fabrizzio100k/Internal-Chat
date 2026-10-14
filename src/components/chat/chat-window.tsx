@@ -9,8 +9,10 @@ import {
   useState,
 } from "react";
 import { useDropzone } from "react-dropzone";
+import { useRouter } from "next/navigation";
+import { ChatSearchDialog } from "@/components/chat/chat-search-dialog";
 import { AnimatePresence, motion } from "framer-motion";
-import { Loader2, Menu, UploadCloud, Users } from "lucide-react";
+import { Loader2, Menu, Search, UploadCloud, Users } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -76,6 +78,8 @@ export function ChatWindow({
     members: initialMembers,
   });
   const [isGroupInfoOpen, setIsGroupInfoOpen] = useState(false);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const router = useRouter();
   const members = group.members;
   const displayTitle = isGroup ? group.name : title;
 
@@ -352,6 +356,27 @@ export function ChatWindow({
   }, []);
 
   const handleStartEdit = useCallback((messageId: string) => setEditingMessageId(messageId), []);
+  // Resultado de la búsqueda dentro del chat: si el mensaje ya está cargado se
+  // salta a él al instante; si es antiguo, se recarga la conversación centrada en él.
+  const handleSearchSelect = useCallback(
+    (targetConversationId: string, messageId: string) => {
+      setIsSearchOpen(false);
+      const el = document.getElementById(`msg-${messageId}`);
+      if (el) {
+        shouldStickToBottom.current = false;
+        el.scrollIntoView({ block: "center" });
+        el.classList.remove("message-flash");
+        // Reinicia la animación de resaltado aunque ya se hubiera aplicado antes.
+        void el.offsetWidth;
+        el.classList.add("message-flash");
+        window.setTimeout(() => el.classList.remove("message-flash"), 1900);
+        return;
+      }
+      router.push(`/chat/${targetConversationId}?m=${encodeURIComponent(messageId)}`);
+    },
+    [router],
+  );
+
   const handleCancelEdit = useCallback(() => setEditingMessageId(null), []);
 
   const handleSaveEdit = useCallback(async (messageId: string, content: string) => {
@@ -442,7 +467,24 @@ export function ChatWindow({
             </div>
           </>
         )}
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="ml-auto shrink-0"
+          onClick={() => setIsSearchOpen(true)}
+          aria-label="Buscar en este chat"
+        >
+          <Search />
+        </Button>
       </header>
+
+      <ChatSearchDialog
+        open={isSearchOpen}
+        onOpenChange={setIsSearchOpen}
+        scopedConversationId={conversationId}
+        onSelect={handleSearchSelect}
+      />
 
       {isGroup && (
         <GroupInfoDialog
