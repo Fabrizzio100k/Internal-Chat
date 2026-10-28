@@ -190,6 +190,8 @@ export function ChatSidebar({
   const [isGroupOpen, setIsGroupOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const settings = useSettingsState("account");
+  // Mi avatar: estado local para que cambiarlo en Ajustes se refleje al instante aquí.
+  const [myAvatar, setMyAvatar] = useState(currentUserAvatar);
   const openSettings = settings.openAt;
   const [, startTransition] = useTransition();
   const { onlineUserIds } = usePresence();
@@ -517,9 +519,7 @@ export function ChatSidebar({
           aria-label="Abrir ajustes de la cuenta"
         >
           <div className="relative">
-            <Avatar>
-              <AvatarFallback>{currentUser.username.slice(0, 2).toUpperCase()}</AvatarFallback>
-            </Avatar>
+            <UserAvatar username={currentUser.username} avatar={myAvatar} />
             <PresenceDot online={onlineUserIds.has(currentUser.userId)} className="absolute -right-0.5 -bottom-0.5" />
           </div>
           <div className="flex min-w-0 flex-col">
@@ -786,7 +786,8 @@ export function ChatSidebar({
         section={settings.section}
         onSectionChange={settings.setSection}
         username={currentUser.username}
-        avatar={currentUserAvatar}
+        avatar={myAvatar}
+        onAvatarChange={setMyAvatar}
       />
 
       <CreateGroupDialog

@@ -19,6 +19,16 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.0.1",
+    date: "2026-10-28",
+    title: "Avisos visibles y avatar sincronizado",
+    silent: true,
+    highlights: [
+      "Ahora aparecen los avisos de confirmación (por ejemplo \"Avatar actualizado\") en la parte de arriba de la pantalla.",
+      "Tu avatar se actualiza al instante en la barra lateral al cambiarlo en Ajustes.",
+    ],
+  },
+  {
     version: "1.0.0",
     date: "2026-10-28",
     title: "Versión 1.0: funciona aunque tu red bloquee la conexión en vivo",

@@ -1,13 +1,21 @@
 "use client";
 
+import { useState } from "react";
 import { Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SettingsDialog, useSettingsState } from "@/components/app/settings-dialog";
 import { UserAvatar } from "@/components/app/user-avatar";
 
 /** Perfil y ajustes (cuenta, apariencia, dispositivos, novedades) del launcher. */
-export function SessionMenu({ username, avatar }: { username: string; avatar: string | null }) {
+export function SessionMenu({
+  username,
+  avatar: initialAvatar,
+}: {
+  username: string;
+  avatar: string | null;
+}) {
   const settings = useSettingsState("account");
+  const [avatar, setAvatar] = useState(initialAvatar);
 
   return (
     <div className="flex items-center gap-2">
@@ -37,6 +45,7 @@ export function SessionMenu({ username, avatar }: { username: string; avatar: st
         onSectionChange={settings.setSection}
         username={username}
         avatar={avatar}
+        onAvatarChange={setAvatar}
       />
     </div>
   );

@@ -37,6 +37,7 @@ export function SettingsDialog({
   onSectionChange,
   username,
   avatar = null,
+  onAvatarChange,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -45,6 +46,8 @@ export function SettingsDialog({
   username: string;
   /** Avatar guardado del usuario ("estilo:semilla"); null = el derivado del username. */
   avatar?: string | null;
+  /** Se llama al guardar un avatar nuevo, para que el resto de la pantalla se actualice al instante. */
+  onAvatarChange?: (avatar: string | null) => void;
 }) {
   const current = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0];
   return (
@@ -106,7 +109,9 @@ export function SettingsDialog({
           </header>
 
           {/* Cada sección se monta solo si está activa y el diálogo abierto: carga fresca. */}
-          {open && section === "account" && <AccountSection username={username} initialAvatar={avatar} />}
+          {open && section === "account" && (
+            <AccountSection username={username} initialAvatar={avatar} onAvatarChange={onAvatarChange} />
+          )}
           {open && section === "appearance" && <AppearanceSection />}
           {open && section === "devices" && <DevicesPanel />}
           {open && section === "news" && <ChangelogList entries={CHANGELOG} />}
@@ -119,9 +124,11 @@ export function SettingsDialog({
 function AccountSection({
   username,
   initialAvatar,
+  onAvatarChange,
 }: {
   username: string;
   initialAvatar: string | null;
+  onAvatarChange?: (avatar: string | null) => void;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -154,7 +161,14 @@ function AccountSection({
         </Button>
       </div>
 
-      <AvatarPicker username={username} avatar={avatar} onSaved={setAvatar} />
+      <AvatarPicker
+        username={username}
+        avatar={avatar}
+        onSaved={(next) => {
+          setAvatar(next);
+          onAvatarChange?.(next);
+        }}
+      />
 
       <DeleteAccountPanel />
     </div>
