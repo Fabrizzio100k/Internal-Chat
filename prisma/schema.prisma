@@ -33,7 +33,50 @@ model User {
   messages    Message[]
   attachments Attachment[]
 
+  key UserKey?
+
+  receivedConversationKeys ConversationKey[] @relation("KeyRecipient")
+  issuedConversationKeys   ConversationKey[] @relation("WrappedKeys")
+
   @@map("users")
+}
+
+// Claves E2EE del usuario. El servidor SOLO guarda claves públicas y las
+// privadas ya cifradas en el navegador con una clave derivada de la contraseña
+// (el servidor nunca puede descifrarlas).
+model UserKey {
+  userId               String   @id
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // SPKI en base64.
+  ecdhPublicKey        String
+  signPublicKey        String
+  // base64(iv || AES-GCM(pkcs8 ecdh + pkcs8 sign)).
+  encryptedPrivateKeys String
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@map("user_keys")
+}
+
+// Clave simétrica de una conversación para UN miembro y UNA época, cifrada para
+// su clave pública (ECIES) y firmada por quien la repartió. Al entrar o salir
+// alguien se crea una época nueva; las épocas viejas se conservan para el historial.
+model ConversationKey {
+  id             String       @id @default(cuid())
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversationId String
+  epoch          Int
+  user           User         @relation("KeyRecipient", fields: [userId], references: [id], onDelete: Cascade)
+  userId         String
+  wrappedKey     String
+  wrappedBy      User         @relation("WrappedKeys", fields: [wrappedById], references: [id], onDelete: Cascade)
+  wrappedById    String
+  signature      String
+  createdAt      DateTime     @default(now())
+
+  @@unique([conversationId, epoch, userId])
+  @@index([userId, conversationId])
+  @@map("conversation_keys")
 }
 
 model ChatRequest {
@@ -58,8 +101,15 @@ model Conversation {
   name        String?
   createdById String?
 
+  // Época de la clave E2EE vigente. 0 = aún sin clave (conversación previa al E2EE
+  // o recién creada). Sube en 1 cada vez que cambia la membresía.
+  currentEpoch       Int     @default(0)
+  // true cuando alguien salió y falta rotar la clave (la rota el siguiente cliente que la use).
+  keyRotationPending Boolean @default(false)
+
   participants ConversationParticipant[]
   messages     Message[]
+  keys         ConversationKey[]
 
   @@map("conversations")
 }
@@ -93,7 +143,12 @@ model Message {
   conversationId String
   sender         User         @relation(fields: [senderId], references: [id])
   senderId       String
+  // Texto en claro: SOLO mensajes de sistema (kind != null) y mensajes anteriores
+  // al E2EE que aún no se migraron. Los mensajes normales van en `ciphertext`.
   content        String?
+  // E2EE: base64(iv || AES-GCM(payload) || firma). El servidor no puede leerlo.
+  ciphertext     String?
+  keyEpoch       Int?
   createdAt      DateTime     @default(now())
   editedAt       DateTime?
   deletedAt      DateTime?
@@ -106,7 +161,6 @@ model Message {
   attachments Attachment[]
 
   @@index([conversationId, createdAt])
-  @@index([content(ops: raw("gin_trgm_ops"))], type: Gin)
   @@map("messages")
 }
 
@@ -116,14 +170,19 @@ model Attachment {
   messageId  String
   uploader   User     @relation(fields: [uploaderId], references: [id])
   uploaderId String
-  fileName   String
-  fileType   String
-  fileSize   Int
+  // Metadatos en claro: SOLO adjuntos anteriores al E2EE. En los cifrados el nombre,
+  // tipo y tamaño real viajan dentro del mensaje cifrado y estos campos son null.
+  fileName   String?
+  fileType   String?
+  fileSize   Int?
   storagePath String
+  // E2EE: identificador aleatorio (último tramo de storagePath) que liga el adjunto
+  // con su entrada dentro del mensaje cifrado, y tamaño del blob cifrado en S3.
+  ref        String?
+  encSize    Int?
   createdAt  DateTime @default(now())
 
   @@index([messageId])
-  @@index([fileName(ops: raw("gin_trgm_ops"))], type: Gin)
 
   @@map("attachments")
 }

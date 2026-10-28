@@ -18,6 +18,8 @@ import {
   type PendingAttachment,
 } from "@/components/chat/attachment-composer";
 import type { MessageData } from "@/components/chat/message-item";
+import { decryptWireMessages } from "@/lib/e2ee/messages";
+import { sendFilesMessage } from "@/lib/e2ee/outgoing";
 
 const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024;
 const MAX_MESSAGE_LENGTH = 5000;
@@ -96,75 +98,22 @@ export const MessageComposer = memo(
       );
     }, []);
 
-    // Sube un archivo a S3 vía URL firmada. No crea ningún mensaje.
-    const presignAndPut = useCallback(
-      async (file: File): Promise<{ storagePath: string } | null> => {
-        const presignRes = await fetch("/api/upload/presign", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            conversationId,
-            fileName: file.name,
-            fileType: file.type || "application/octet-stream",
-            fileSize: file.size,
-          }),
-        });
-        const presignData = await presignRes.json();
-        if (!presignRes.ok) {
-          toast.error(presignData.error ?? `No se pudo subir "${file.name}"`);
-          return null;
-        }
-        const { uploadUrl, storagePath } = presignData;
-
-        const uploadRes = await fetch(uploadUrl, {
-          method: "PUT",
-          headers: { "Content-Type": file.type || "application/octet-stream" },
-          body: file,
-        });
-        if (!uploadRes.ok) {
-          toast.error(`No se pudo subir "${file.name}"`);
-          return null;
-        }
-        return { storagePath };
-      },
-      [conversationId],
-    );
-
     const sendWithAttachments = useCallback(
       async (content: string, items: PendingAttachment[]): Promise<boolean> => {
         setIsUploading(true);
         try {
-          const uploaded = await Promise.all(
-            items.map(async (item) => {
-              const result = await presignAndPut(item.file);
-              if (!result) return null;
-              return {
-                storagePath: result.storagePath,
-                fileName: item.file.name,
-                fileType: item.file.type || "application/octet-stream",
-                fileSize: item.file.size,
-              };
-            }),
+          // Cada archivo se cifra y se sube desde aquí; el servidor solo ve bytes opacos.
+          const result = await sendFilesMessage(
+            conversationId,
+            content,
+            items.map((item) => item.file),
           );
-
-          if (uploaded.some((u) => u === null)) return false;
-
-          const confirmRes = await fetch("/api/upload/confirm", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              conversationId,
-              content: content || undefined,
-              attachments: uploaded,
-            }),
-          });
-          const confirmData = await confirmRes.json();
-          if (!confirmRes.ok || !confirmData.success) {
-            toast.error(confirmData.error ?? "No se pudo enviar los adjuntos");
+          if (!result.success) {
+            toast.error(result.error);
             return false;
           }
-
-          onAttachmentsSent(confirmData.message);
+          const [message] = await decryptWireMessages([result.message]);
+          onAttachmentsSent(message);
           return true;
         } catch {
           toast.error("Error subiendo los adjuntos");
@@ -173,7 +122,7 @@ export const MessageComposer = memo(
           setIsUploading(false);
         }
       },
-      [conversationId, presignAndPut, onAttachmentsSent],
+      [conversationId, onAttachmentsSent],
     );
 
     const handleSend = () => {

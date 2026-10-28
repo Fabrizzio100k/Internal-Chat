@@ -12,31 +12,46 @@ import { useDropzone } from "react-dropzone";
 import { useRouter } from "next/navigation";
 import { ChatSearchDialog } from "@/components/chat/chat-search-dialog";
 import { AnimatePresence, motion } from "framer-motion";
-import { Loader2, Menu, Search, UploadCloud, Users } from "lucide-react";
+import { Loader2, Lock, Menu, Search, ShieldAlert, UploadCloud, Users } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import {
-  sendMessageAction,
-  listMessagesAction,
-  editMessageAction,
-  deleteMessageAction,
-} from "@/lib/actions/messages";
+import { listMessagesAction, deleteMessageAction } from "@/lib/actions/messages";
 import { markConversationReadAction } from "@/lib/actions/chat";
 import { PresenceDot } from "@/components/chat/presence-dot";
 import { TypingIndicator } from "@/components/chat/typing-indicator";
 import { MessageItem, type MessageData } from "@/components/chat/message-item";
 import { MessageComposer, type MessageComposerHandle } from "@/components/chat/message-composer";
 import { GroupInfoDialog } from "@/components/chat/group-info-dialog";
+import { EncryptionDialog } from "@/components/chat/encryption-dialog";
 import { getGroupInfoAction } from "@/lib/actions/groups";
 import type { GroupInfo, GroupMember } from "@/lib/types/groups";
+import type { WireMessage } from "@/lib/types/messages";
 import { usePresence } from "@/hooks/use-presence";
 import { useInboxHandler } from "@/hooks/use-inbox";
 import { useTypingStatus } from "@/hooks/use-typing";
 import { useSidebar } from "@/hooks/use-sidebar";
+import {
+  KeyChangedError,
+  getConversationState,
+  invalidateConversation,
+} from "@/lib/e2ee/conversation-keys";
+import {
+  decryptPayload,
+  decryptWireMessage,
+  decryptWireMessages,
+} from "@/lib/e2ee/messages";
+import { editTextMessage, sendTextMessage } from "@/lib/e2ee/outgoing";
+import { indexMessages } from "@/lib/e2ee/search-index";
+import { deleteSearchDoc } from "@/lib/e2ee/key-store";
 
 type SessionUser = { userId: string; username: string };
 type Member = { id: string; username: string };
+
+/** Aviso de seguridad mostrado bajo el encabezado de la conversación. */
+type SecurityNotice =
+  | { kind: "key-changed"; username: string }
+  | { kind: "missing-keys"; usernames: string[] };
 
 const SCROLL_TOP_THRESHOLD = 80; // px desde arriba para disparar "cargar más"
 const STICK_BOTTOM_THRESHOLD = 120; // px desde el fondo para seguir pegado al final
@@ -64,11 +79,13 @@ export function ChatWindow({
   otherUser: Member | null;
   members: GroupMember[];
   myRole: "ADMIN" | "MEMBER";
-  initialMessages: MessageData[];
+  /** Mensajes tal como salen del servidor: cifrados. Se descifran aquí. */
+  initialMessages: WireMessage[];
   initialHasMore: boolean;
   highlightMessageId?: string;
 }) {
-  const [messages, setMessages] = useState<MessageData[]>(initialMessages);
+  const [messages, setMessages] = useState<MessageData[]>([]);
+  const [isReady, setIsReady] = useState(false);
   const [hasMore, setHasMore] = useState(initialHasMore);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
@@ -79,9 +96,25 @@ export function ChatWindow({
   });
   const [isGroupInfoOpen, setIsGroupInfoOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isEncryptionOpen, setIsEncryptionOpen] = useState(false);
+  const [notice, setNotice] = useState<SecurityNotice | null>(null);
   const router = useRouter();
   const members = group.members;
   const displayTitle = isGroup ? group.name : title;
+
+  // Revisa el estado de las claves de la conversación (cambios de clave de alguien,
+  // miembros sin cifrado activo) y avisa sin bloquear la lectura.
+  const checkSecurity = useCallback(async () => {
+    try {
+      const state = await getConversationState(conversationId);
+      const missing = state.bundle.members.filter((m) => !m.ecdhPublicKey || !m.signPublicKey);
+      setNotice(missing.length ? { kind: "missing-keys", usernames: missing.map((m) => m.username) } : null);
+    } catch (error) {
+      if (error instanceof KeyChangedError) {
+        setNotice({ kind: "key-changed", username: error.username });
+      }
+    }
+  }, [conversationId]);
 
   // Refresca miembros/roles/nombre del grupo (tras una acción o un evento en vivo).
   const refreshGroup = useCallback(() => {
@@ -99,11 +132,35 @@ export function ChatWindow({
   const contentRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<MessageComposerHandle>(null);
   const seenMessageIds = useRef(new Set(initialMessages.map((m) => m.id)));
+  const messagesRef = useRef<MessageData[]>([]);
+  const didInitialPosition = useRef(false);
   const shouldStickToBottom = useRef(!highlightMessageId);
   // Estado de scroll leído desde el handler sin re-crearlo en cada render.
   const stateRef = useRef({ hasMore, isLoadingMore: false, oldestCreatedAt: "" });
   const restoreScrollRef = useRef<number | null>(null);
   const scrollRafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  // Descifra el historial inicial (llega cifrado del servidor) y lo indexa para la búsqueda.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      await checkSecurity();
+      const decrypted = await decryptWireMessages(initialMessages);
+      if (cancelled) return;
+      setMessages(decrypted);
+      setIsReady(true);
+      indexMessages(currentUser.userId, decrypted).catch(() => {});
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Solo al montar: la página remonta ChatWindow al cambiar de conversación/mensaje.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const { onlineUserIds, isRealtimeConnected } = usePresence();
   const { toggle: toggleSidebar } = useSidebar();
@@ -123,8 +180,10 @@ export function ChatWindow({
   }, [hasMore, oldestIso]);
 
   // Posición inicial: al fondo, o centrado en el mensaje buscado. Se hace antes
-  // del primer pintado para que no se vea ningún salto.
+  // del primer pintado de los mensajes (ya descifrados) para que no se vea ningún salto.
   useLayoutEffect(() => {
+    if (!isReady || didInitialPosition.current) return;
+    didInitialPosition.current = true;
     const container = scrollContainerRef.current;
     if (!container) return;
     if (highlightMessageId) {
@@ -134,9 +193,7 @@ export function ChatWindow({
     } else {
       scrollToBottom(container);
     }
-    // Solo al montar (la página remonta ChatWindow al cambiar de conversación/mensaje).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isReady, highlightMessageId]);
 
   // Marca la conversación como leída al abrirla.
   useEffect(() => {
@@ -196,17 +253,19 @@ export function ChatWindow({
     setIsLoadingMore(true);
     try {
       const result = await listMessagesAction(conversationId, state.oldestCreatedAt);
-      result.messages.forEach((m) => seenMessageIds.current.add(m.id));
+      const older = await decryptWireMessages(result.messages);
+      older.forEach((m) => seenMessageIds.current.add(m.id));
       restoreScrollRef.current = container.scrollHeight;
-      setMessages((prev) => [...result.messages, ...prev]);
+      setMessages((prev) => [...older, ...prev]);
       setHasMore(result.hasMore);
+      indexMessages(currentUser.userId, older).catch(() => {});
     } catch {
       toast.error("No se pudo cargar el historial");
     } finally {
       state.isLoadingMore = false;
       setIsLoadingMore(false);
     }
-  }, [conversationId]);
+  }, [conversationId, currentUser.userId]);
 
   // Handler de scroll ligero: una lectura de layout por frame como máximo y sin
   // setState salvo cuando de verdad hay que cargar más historial.
@@ -230,6 +289,7 @@ export function ChatWindow({
   }, []);
 
   // Eventos en vivo (inbox privado del usuario) que pertenecen a ESTA conversación.
+  // Todo llega cifrado: se descifra aquí, en el navegador.
   useInboxHandler((event) => {
     switch (event.type) {
       case "message": {
@@ -239,18 +299,40 @@ export function ChatWindow({
         seenMessageIds.current.add(incoming.id);
 
         // Evento de grupo (alta/baja, rol, renombrado): refresca el panel de miembros.
-        if (incoming.kind) refreshGroupRef.current();
+        if (incoming.kind) {
+          refreshGroupRef.current();
+          void checkSecurity();
+        }
 
-        const message: MessageData = { ...incoming, isNew: true };
-        setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]));
+        decryptWireMessage(incoming).then((message) =>
+          setMessages((prev) =>
+            prev.some((m) => m.id === message.id) ? prev : [...prev, { ...message, isNew: true }],
+          ),
+        );
         return;
       }
       case "message_updated": {
         if (event.conversationId !== conversationId) return;
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === event.messageId ? { ...m, content: event.content, editedAt: event.editedAt } : m,
-          ),
+        const target = messagesRef.current.find((m) => m.id === event.messageId);
+        if (!target) return;
+        decryptPayload(conversationId, target.senderId, event.ciphertext, event.keyEpoch)
+          .then((payload) =>
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === event.messageId
+                  ? { ...m, content: payload.text, editedAt: event.editedAt, security: "e2ee" }
+                  : m,
+              ),
+            ),
+          )
+          .catch(() => {});
+        return;
+      }
+      case "message_migrated": {
+        // Su autor cifró un mensaje antiguo: reemplaza la versión en claro.
+        if (event.conversationId !== conversationId) return;
+        decryptWireMessage(event.message).then((migrated) =>
+          setMessages((prev) => prev.map((m) => (m.id === migrated.id ? migrated : m))),
         );
         return;
       }
@@ -263,16 +345,22 @@ export function ChatWindow({
         );
         return;
       }
+      case "keys_updated": {
+        if (event.conversationId !== conversationId) return;
+        void checkSecurity();
+        return;
+      }
       case "resync": {
         // Reconexión: trae lo último y añade lo que no tengamos.
         listMessagesAction(conversationId)
-          .then((result) => {
+          .then(async (result) => {
             const fresh = result.messages.filter((m) => !seenMessageIds.current.has(m.id));
             if (fresh.length === 0) return;
             fresh.forEach((m) => seenMessageIds.current.add(m.id));
+            const decrypted = await decryptWireMessages(fresh);
             setMessages((prev) => {
               const known = new Set(prev.map((m) => m.id));
-              const merged = [...prev, ...fresh.filter((m) => !known.has(m.id))];
+              const merged = [...prev, ...decrypted.filter((m) => !known.has(m.id))];
               return merged.sort(
                 (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
               );
@@ -286,20 +374,26 @@ export function ChatWindow({
     }
   });
 
-  const appendLocalMessage = useCallback((message: MessageData) => {
-    seenMessageIds.current.add(message.id);
-    shouldStickToBottom.current = true;
-    setMessages((prev) =>
-      prev.some((m) => m.id === message.id) ? prev : [...prev, { ...message, isNew: true }],
-    );
-  }, []);
+  const appendLocalMessage = useCallback(
+    (message: MessageData) => {
+      seenMessageIds.current.add(message.id);
+      shouldStickToBottom.current = true;
+      setMessages((prev) =>
+        prev.some((m) => m.id === message.id) ? prev : [...prev, { ...message, isNew: true }],
+      );
+      indexMessages(currentUser.userId, [message]).catch(() => {});
+    },
+    [currentUser.userId],
+  );
 
   // Envío optimista: la burbuja aparece al instante (atenuada) y se confirma
   // cuando responde el servidor. Si falla, se retira y el compositor restaura el texto.
+  // El texto se cifra en el navegador antes de salir.
   const handleSendText = useCallback(
     async (content: string): Promise<boolean> => {
       const tempId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       shouldStickToBottom.current = true;
+      const createdAt = new Date().toISOString();
       setMessages((prev) => [
         ...prev,
         {
@@ -307,17 +401,18 @@ export function ChatWindow({
           conversationId,
           senderId: currentUser.userId,
           content,
-          createdAt: new Date().toISOString(),
+          createdAt,
           sender: { id: currentUser.userId, username: currentUser.username },
           attachments: [],
+          security: "e2ee",
           pending: true,
           isNew: true,
         },
       ]);
 
-      let result: Awaited<ReturnType<typeof sendMessageAction>>;
+      let result: Awaited<ReturnType<typeof sendTextMessage>>;
       try {
-        result = await sendMessageAction(conversationId, content);
+        result = await sendTextMessage(conversationId, content);
       } catch {
         result = { success: false, error: "No se pudo enviar el mensaje" };
       }
@@ -325,11 +420,25 @@ export function ChatWindow({
       if (!result.success || !result.messageId) {
         toast.error(result.error ?? "No se pudo enviar el mensaje");
         setMessages((prev) => prev.filter((m) => m.id !== tempId));
+        if (result.code) invalidateConversation(conversationId);
+        void checkSecurity();
         return false;
       }
 
       const realId = result.messageId;
       seenMessageIds.current.add(realId);
+      indexMessages(currentUser.userId, [
+        {
+          id: realId,
+          conversationId,
+          senderId: currentUser.userId,
+          content,
+          createdAt,
+          sender: { id: currentUser.userId, username: currentUser.username },
+          attachments: [],
+          security: "e2ee",
+        },
+      ]).catch(() => {});
       setMessages((prev) => {
         // Si Realtime ya trajo el mensaje real, descartamos el temporal.
         if (prev.some((m) => m.id === realId)) return prev.filter((m) => m.id !== tempId);
@@ -337,7 +446,7 @@ export function ChatWindow({
       });
       return true;
     },
-    [conversationId, currentUser.userId, currentUser.username],
+    [conversationId, currentUser.userId, currentUser.username, checkSecurity],
   );
 
   const onDrop = useCallback((files: File[]) => composerRef.current?.addFiles(files), []);
@@ -379,20 +488,28 @@ export function ChatWindow({
 
   const handleCancelEdit = useCallback(() => setEditingMessageId(null), []);
 
-  const handleSaveEdit = useCallback(async (messageId: string, content: string) => {
-    const result = await editMessageAction(messageId, content);
-    if (!result.success) {
-      toast.error(result.error ?? "No se pudo editar el mensaje");
-      return false;
-    }
-    setMessages((prev) =>
-      prev.map((m) =>
-        m.id === messageId ? { ...m, content, editedAt: new Date().toISOString() } : m,
-      ),
-    );
-    setEditingMessageId(null);
-    return true;
-  }, []);
+  const handleSaveEdit = useCallback(
+    async (messageId: string, content: string) => {
+      const result = await editTextMessage(messageId, conversationId, content);
+      if (!result.success) {
+        toast.error(result.error ?? "No se pudo editar el mensaje");
+        return false;
+      }
+      const editedAt = new Date().toISOString();
+      setMessages((prev) =>
+        prev.map((m) => (m.id === messageId ? { ...m, content, editedAt, security: "e2ee" } : m)),
+      );
+      const edited = messagesRef.current.find((m) => m.id === messageId);
+      if (edited) {
+        indexMessages(currentUser.userId, [{ ...edited, content, editedAt, security: "e2ee" }]).catch(
+          () => {},
+        );
+      }
+      setEditingMessageId(null);
+      return true;
+    },
+    [conversationId, currentUser.userId],
+  );
 
   const handleDeleteMessage = useCallback(async (messageId: string) => {
     const result = await deleteMessageAction(messageId);
@@ -405,7 +522,8 @@ export function ChatWindow({
         m.id === messageId ? { ...m, content: null, deletedAt: new Date().toISOString() } : m,
       ),
     );
-  }, []);
+    deleteSearchDoc(currentUser.userId, messageId).catch(() => {});
+  }, [currentUser.userId]);
 
   const headerSubtitle = isRealtimeConnected
     ? isOtherUserOnline
@@ -472,12 +590,58 @@ export function ChatWindow({
           variant="ghost"
           size="icon-sm"
           className="ml-auto shrink-0"
+          onClick={() => setIsEncryptionOpen(true)}
+          aria-label="Cifrado de extremo a extremo: ver verificación de seguridad"
+          title="Cifrado de extremo a extremo"
+        >
+          <Lock />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="shrink-0"
           onClick={() => setIsSearchOpen(true)}
           aria-label="Buscar en este chat"
         >
           <Search />
         </Button>
       </header>
+
+      {notice && (
+        <div
+          role="alert"
+          className="flex shrink-0 items-start gap-2 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs text-destructive"
+        >
+          <ShieldAlert className="mt-0.5 size-3.5 shrink-0" />
+          <span className="min-w-0 flex-1">
+            {notice.kind === "key-changed"
+              ? `La clave de cifrado de ${notice.username} cambió. Verifica su identidad antes de seguir enviando información sensible.`
+              : `${notice.usernames.join(", ")} aún no activó el cifrado: no podrá leer los mensajes nuevos hasta iniciar sesión una vez.`}
+          </span>
+          {notice.kind === "key-changed" && (
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              onClick={() => setIsEncryptionOpen(true)}
+            >
+              Revisar
+            </Button>
+          )}
+        </div>
+      )}
+
+      <EncryptionDialog
+        open={isEncryptionOpen}
+        onOpenChange={setIsEncryptionOpen}
+        conversationId={conversationId}
+        isGroup={isGroup}
+        onTrustChanged={() => {
+          invalidateConversation(conversationId);
+          void checkSecurity();
+        }}
+      />
 
       <ChatSearchDialog
         open={isSearchOpen}
@@ -510,7 +674,12 @@ export function ChatWindow({
               <Loader2 className="size-4 animate-spin text-muted-foreground" />
             </div>
           )}
-          {!hasMore && messages.length > 0 && (
+          {!isReady && (
+            <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" /> Descifrando mensajes...
+            </div>
+          )}
+          {isReady && !hasMore && messages.length > 0 && (
             <p className="py-1 text-center text-[11px] text-muted-foreground">
               Inicio de la conversación
             </p>

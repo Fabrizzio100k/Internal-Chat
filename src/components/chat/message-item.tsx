@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useState } from "react";
-import { Check, Loader2, X } from "lucide-react";
+import { Check, Loader2, Lock, ShieldAlert, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
@@ -11,31 +11,9 @@ import { MessageContent } from "@/components/chat/message-content";
 import { MessageTimestamp } from "@/components/chat/message-timestamp";
 import { LinkPreviewCard } from "@/components/chat/link-preview-card";
 import { MessageContextMenu } from "@/components/chat/message-context-menu";
+import type { AttachmentData, MessageData } from "@/lib/e2ee/message-types";
 
-export type AttachmentData = {
-  id: string;
-  fileName: string;
-  fileType: string;
-  fileSize: number;
-};
-
-export type MessageData = {
-  id: string;
-  conversationId: string;
-  senderId: string;
-  content: string | null;
-  createdAt: string | Date;
-  editedAt?: string | Date | null;
-  deletedAt?: string | Date | null;
-  sender: { id: string; username: string };
-  attachments: AttachmentData[];
-  /** Mensaje de sistema de grupos ("member_added", "group_renamed", ...). */
-  kind?: string | null;
-  /** Enviado optimistamente, pendiente de confirmación del servidor. */
-  pending?: boolean;
-  /** Llegó en vivo (no del historial): se anima su entrada. */
-  isNew?: boolean;
-};
+export type { AttachmentData, MessageData };
 
 type Props = {
   message: MessageData;
@@ -134,6 +112,34 @@ export const MessageItem = memo(function MessageItem({
   }
 
   const isDeleted = Boolean(message.deletedAt);
+  const isLocked = message.security === "undecryptable";
+  const isLegacy = message.security === "legacy";
+
+  if (isLocked && !isDeleted) {
+    // No se pudo descifrar/verificar (p. ej. mensaje anterior a tu ingreso al grupo).
+    return (
+      <div
+        id={`msg-${message.id}`}
+        className={cn(
+          "flex w-full min-w-0 flex-col",
+          isOwn ? "items-end" : "items-start",
+          message.isNew && "message-in",
+        )}
+      >
+        {senderLabel && (
+          <span className="mb-0.5 px-1 text-[11px] font-medium text-muted-foreground">
+            {senderLabel}
+          </span>
+        )}
+        <div className="flex max-w-[85%] items-center gap-1.5 rounded-2xl border border-dashed bg-muted/40 px-3.5 py-2 text-xs italic text-muted-foreground sm:max-w-md">
+          <Lock className="size-3 shrink-0" />
+          {message.securityNote ?? "Mensaje cifrado"}
+        </div>
+        <MessageTimestamp date={message.createdAt} />
+      </div>
+    );
+  }
+
   const previewUrl = !isDeleted ? extractFirstUrl(message.content) : null;
   const canEdit =
     isOwn && !isDeleted && !message.pending && message.attachments.length === 0 && Boolean(message.content);
@@ -197,6 +203,12 @@ export const MessageItem = memo(function MessageItem({
         <MessageAttachment key={attachment.id} attachment={attachment} />
       ))}
       <MessageTimestamp date={message.createdAt} />
+      {isLegacy && !isDeleted && (
+        <span className="flex items-center gap-1 px-1 text-[10px] text-amber-600 dark:text-amber-400">
+          <ShieldAlert className="size-3" />
+          Sin cifrar (mensaje anterior). Se cifrará cuando su autor se conecte.
+        </span>
+      )}
     </div>
   );
 });

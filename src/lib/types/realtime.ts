@@ -1,20 +1,10 @@
 // Eventos que el servidor publica en el "inbox" privado de cada usuario.
-// Solo viajan hacia los participantes de la conversación afectada.
+// Solo viajan hacia los participantes de la conversación afectada. Los mensajes
+// van cifrados de extremo a extremo: ni este canal ni Supabase ven el contenido.
 
-export type RealtimeMessage = {
-  id: string;
-  conversationId: string;
-  senderId: string;
-  content: string | null;
-  createdAt: string;
-  editedAt: string | null;
-  deletedAt: string | null;
-  /** Mensaje de sistema de grupos ("member_added", ...) o null. */
-  kind: string | null;
-  targetUserIds: string[];
-  sender: { id: string; username: string };
-  attachments: { id: string; fileName: string; fileType: string; fileSize: number }[];
-};
+import type { WireMessage } from "@/lib/types/messages";
+
+export type RealtimeMessage = WireMessage;
 
 export type InboxEvent =
   | { type: "message"; message: RealtimeMessage }
@@ -22,10 +12,15 @@ export type InboxEvent =
       type: "message_updated";
       conversationId: string;
       messageId: string;
-      content: string;
+      ciphertext: string;
+      keyEpoch: number;
       editedAt: string;
     }
   | { type: "message_deleted"; conversationId: string; messageId: string; deletedAt: string }
+  // Un mensaje antiguo en claro fue cifrado por su autor: reemplaza la versión anterior.
+  | { type: "message_migrated"; conversationId: string; message: RealtimeMessage }
+  // Cambió la clave de la conversación (miembro nuevo/salió, rotación): re-pedir el bundle.
+  | { type: "keys_updated"; conversationId: string }
   | { type: "conversation_added"; conversationId: string }
   | { type: "request_received" }
   // Sintético (lo genera el cliente al reconectar): hay que re-sincronizar.

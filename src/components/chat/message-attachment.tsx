@@ -18,9 +18,10 @@ import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/format";
 import {
   getAttachmentText,
-  getAttachmentUrl,
+  getAttachmentBlob,
   downloadAttachment,
 } from "@/lib/attachment-client";
+import type { AttachmentData } from "@/lib/e2ee/message-types";
 import {
   getPreviewKind,
   getCodeLanguage,
@@ -40,13 +41,6 @@ const FilePreviewModal = dynamic(
   () => import("@/components/chat/file-preview-modal").then((m) => m.FilePreviewModal),
   { ssr: false },
 );
-
-type AttachmentData = {
-  id: string;
-  fileName: string;
-  fileType: string;
-  fileSize: number;
-};
 
 function kindIcon(kind: PreviewKind) {
   switch (kind) {
@@ -84,7 +78,7 @@ function MessageAttachmentImpl({ attachment }: { attachment: AttachmentData }) {
   useEffect(() => {
     if (!isInlineText) return;
     let cancelled = false;
-    getAttachmentText(attachment.id)
+    getAttachmentText(attachment)
       .then((text) => {
         if (!cancelled) setTextContent(text);
       })
@@ -97,15 +91,21 @@ function MessageAttachmentImpl({ attachment }: { attachment: AttachmentData }) {
     return () => {
       cancelled = true;
     };
+    // `attachment` se recrea al descifrar de nuevo; su identidad real es id + clave.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attachment.id, isInlineText]);
 
-  // Las imágenes muestran una miniatura sin esperar al modal.
+  // Las imágenes se descargan, se descifran en el navegador y se muestran desde un
+  // blob local: la URL solo existe en esta pestaña y se libera al desmontar.
   useEffect(() => {
     if (!isImageAttachment) return;
     let cancelled = false;
-    getAttachmentUrl(attachment.id)
-      .then((url) => {
-        if (!cancelled) setFileUrl(url);
+    let objectUrl: string | null = null;
+    getAttachmentBlob(attachment)
+      .then((blob) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setFileUrl(objectUrl);
       })
       .catch(() => {
         if (!cancelled) setThumbnailFailed(true);
@@ -115,13 +115,15 @@ function MessageAttachmentImpl({ attachment }: { attachment: AttachmentData }) {
       });
     return () => {
       cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attachment.id, isImageAttachment]);
 
   const handleDownload = async () => {
     setIsDownloading(true);
     try {
-      await downloadAttachment(attachment.id);
+      await downloadAttachment(attachment);
     } catch {
       toast.error("No se pudo descargar el archivo");
     } finally {
@@ -132,7 +134,7 @@ function MessageAttachmentImpl({ attachment }: { attachment: AttachmentData }) {
   const handleCopyText = async () => {
     setIsCopying(true);
     try {
-      const text = textContent ?? (await getAttachmentText(attachment.id));
+      const text = textContent ?? (await getAttachmentText(attachment));
       await navigator.clipboard.writeText(text ?? "");
       setJustCopied(true);
       setTimeout(() => setJustCopied(false), 1500);

@@ -1,18 +1,36 @@
-// Utilidades de cliente para adjuntos: cachea las URLs firmadas (válidas 5 min)
-// y el texto de previews, y deduplica peticiones en vuelo. Así, re-montar un
-// mensaje (scroll, cambiar de chat y volver) no dispara más fetch a la API ni a S3.
+"use client";
+
+// Utilidades de cliente para adjuntos. Los archivos cifrados (E2EE) se descargan de
+// S3 como bytes opacos y se DESCIFRAN aquí con la clave que viajó dentro del mensaje.
+// Se cachean los bytes ya descifrados (con tope de memoria) y las URLs firmadas, y se
+// deduplican peticiones en vuelo, para que re-montar un mensaje (scroll, cambiar de
+// chat y volver) no vuelva a descargar ni descifrar.
+
+import { decryptFile } from "@/lib/e2ee/crypto";
+import type { AttachmentData } from "@/lib/e2ee/message-types";
+import { onIdentityReset } from "@/lib/e2ee/session";
 
 const URL_TTL_MS = 4 * 60 * 1000;
+const MAX_BYTES_CACHE = 80 * 1024 * 1024;
 const MAX_TEXT_CACHE = 60;
 
 type SignedEntry = { url: string; expires: number };
 
 const urlCache = new Map<string, SignedEntry>();
 const urlInflight = new Map<string, Promise<string>>();
+const bytesCache = new Map<string, ArrayBuffer>();
+const bytesInflight = new Map<string, Promise<ArrayBuffer>>();
 const textCache = new Map<string, string>();
-const textInflight = new Map<string, Promise<string>>();
+let bytesCacheSize = 0;
 
-export function getAttachmentUrl(attachmentId: string): Promise<string> {
+onIdentityReset(() => {
+  urlCache.clear();
+  bytesCache.clear();
+  textCache.clear();
+  bytesCacheSize = 0;
+});
+
+function getSignedUrl(attachmentId: string): Promise<string> {
   const cached = urlCache.get(attachmentId);
   if (cached && cached.expires > Date.now()) return Promise.resolve(cached.url);
 
@@ -32,47 +50,75 @@ export function getAttachmentUrl(attachmentId: string): Promise<string> {
   return promise;
 }
 
-export function getAttachmentText(attachmentId: string): Promise<string> {
-  const cached = textCache.get(attachmentId);
-  if (cached !== undefined) return Promise.resolve(cached);
+function remember(attachmentId: string, bytes: ArrayBuffer): void {
+  if (bytes.byteLength > MAX_BYTES_CACHE) return;
+  bytesCache.set(attachmentId, bytes);
+  bytesCacheSize += bytes.byteLength;
+  // Expulsa los más antiguos hasta volver al tope.
+  for (const key of bytesCache.keys()) {
+    if (bytesCacheSize <= MAX_BYTES_CACHE) break;
+    if (key === attachmentId) continue;
+    bytesCacheSize -= bytesCache.get(key)?.byteLength ?? 0;
+    bytesCache.delete(key);
+  }
+}
 
-  const pending = textInflight.get(attachmentId);
+/** Bytes del archivo ya descifrados (los adjuntos antiguos en claro se devuelven tal cual). */
+export function getAttachmentBytes(attachment: AttachmentData): Promise<ArrayBuffer> {
+  const cached = bytesCache.get(attachment.id);
+  if (cached) return Promise.resolve(cached);
+
+  const pending = bytesInflight.get(attachment.id);
   if (pending) return pending;
 
-  const promise = getAttachmentUrl(attachmentId)
-    .then((url) => fetch(url))
-    .then((res) => {
+  const promise = getSignedUrl(attachment.id)
+    .then(async (url) => {
+      const res = await fetch(url);
       if (!res.ok) throw new Error("No se pudo leer el archivo");
-      return res.text();
+      const raw = await res.arrayBuffer();
+      const bytes = attachment.crypto
+        ? await decryptFile(raw, attachment.crypto.key, attachment.crypto.ref)
+        : raw;
+      remember(attachment.id, bytes);
+      return bytes;
     })
-    .then((text) => {
-      if (textCache.size >= MAX_TEXT_CACHE) {
-        const oldest = textCache.keys().next().value;
-        if (oldest !== undefined) textCache.delete(oldest);
-      }
-      textCache.set(attachmentId, text);
-      return text;
-    })
-    .finally(() => textInflight.delete(attachmentId));
+    .finally(() => bytesInflight.delete(attachment.id));
 
-  textInflight.set(attachmentId, promise);
+  bytesInflight.set(attachment.id, promise);
   return promise;
 }
 
-/**
- * Descarga un adjunto con su nombre ORIGINAL. El servidor firma la URL con
- * Content-Disposition: attachment; filename=<nombre original>, porque el
- * atributo `download` se ignora en URLs de otro origen (S3).
- */
-export async function downloadAttachment(attachmentId: string): Promise<void> {
-  const res = await fetch(`/api/upload/${attachmentId}?download=1`);
-  if (!res.ok) throw new Error("No se pudo descargar");
-  const { url, fileName } = (await res.json()) as { url: string; fileName: string };
+export async function getAttachmentText(attachment: AttachmentData): Promise<string> {
+  const cached = textCache.get(attachment.id);
+  if (cached !== undefined) return cached;
+
+  const text = new TextDecoder().decode(await getAttachmentBytes(attachment));
+  if (textCache.size >= MAX_TEXT_CACHE) {
+    const oldest = textCache.keys().next().value;
+    if (oldest !== undefined) textCache.delete(oldest);
+  }
+  textCache.set(attachment.id, text);
+  return text;
+}
+
+/** Blob del archivo con su tipo MIME original (para imágenes y descargas). */
+export async function getAttachmentBlob(attachment: AttachmentData): Promise<Blob> {
+  return new Blob([await getAttachmentBytes(attachment)], {
+    type: attachment.fileType || "application/octet-stream",
+  });
+}
+
+/** Descarga el archivo ya descifrado con su nombre ORIGINAL. */
+export async function downloadAttachment(attachment: AttachmentData): Promise<void> {
+  const blob = await getAttachmentBlob(attachment);
+  const objectUrl = URL.createObjectURL(blob);
   const link = document.createElement("a");
-  link.href = url;
-  link.download = fileName;
+  link.href = objectUrl;
+  link.download = attachment.fileName;
   link.rel = "noopener";
   document.body.appendChild(link);
   link.click();
   link.remove();
+  // Margen para que el navegador inicie la descarga antes de liberar la URL.
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000);
 }

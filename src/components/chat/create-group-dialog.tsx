@@ -15,6 +15,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { createGroupAction, listContactsAction } from "@/lib/actions/chat";
+import { getSendingKey } from "@/lib/e2ee/conversation-keys";
+import { describeE2eeError } from "@/lib/e2ee/messages";
 
 type Member = { id: string; username: string };
 
@@ -89,6 +91,14 @@ function CreateGroupDialogInner({ open, onOpenChange, currentUser, onCreated }: 
         return;
       }
       const chosen = (contacts ?? []).filter((c) => selected.has(c.id));
+      // El grupo nace sin clave: el creador la genera y la reparte cifrada a cada miembro.
+      try {
+        await getSendingKey(result.conversationId);
+      } catch (error) {
+        toast.error(
+          `El grupo se creó, pero no se pudo activar el cifrado: ${describeE2eeError(error)} Se reintentará al enviar el primer mensaje.`,
+        );
+      }
       onCreated({
         id: result.conversationId,
         isGroup: true,

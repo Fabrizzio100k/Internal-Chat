@@ -18,13 +18,12 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { PresenceDot } from "@/components/chat/presence-dot";
 import { usePresence } from "@/hooks/use-presence";
 import {
-  addGroupMembersAction,
   leaveGroupAction,
   listAddableContactsAction,
-  removeGroupMemberAction,
   renameGroupAction,
   setGroupAdminAction,
 } from "@/lib/actions/groups";
+import { addMembersEncrypted, removeMemberEncrypted } from "@/lib/e2ee/group-keys";
 import type { GroupMember } from "@/lib/types/groups";
 
 type Props = {
@@ -96,7 +95,7 @@ function GroupInfoDialogInner({
   const handleAdd = () => {
     if (selected.size === 0) return;
     run(
-      () => addGroupMembersAction(conversationId, [...selected]),
+      () => addMembersEncrypted(conversationId, [...selected]),
       () => {
         setSelected(new Set());
         setIsAdding(false);
@@ -197,7 +196,7 @@ function GroupInfoDialogInner({
                       variant="ghost"
                       disabled={isPending}
                       aria-label={`Eliminar a ${member.username}`}
-                      onClick={() => run(() => removeGroupMemberAction(conversationId, member.id))}
+                      onClick={() => run(() => removeMemberEncrypted(conversationId, member.id))}
                     >
                       <UserMinus />
                     </Button>

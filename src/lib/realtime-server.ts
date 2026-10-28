@@ -2,6 +2,7 @@ import "server-only";
 import { createHmac } from "crypto";
 import { after } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { toWireMessage } from "@/lib/messages-server";
 import {
   INBOX_EVENT_NAME,
   type InboxEvent,
@@ -25,40 +26,12 @@ export function inboxTopic(userId: string): string {
   return `inbox:${digest.slice(0, 40)}`;
 }
 
-/** Convierte un mensaje de Prisma (con sender y attachments) al formato de red. */
-export function toRealtimeMessage(m: {
-  id: string;
-  conversationId: string;
-  senderId: string;
-  content: string | null;
-  createdAt: Date;
-  editedAt: Date | null;
-  deletedAt: Date | null;
-  kind: string | null;
-  targetUserIds: string[];
-  sender: { id: string; username: string };
-  attachments: { id: string; fileName: string; fileType: string; fileSize: number }[];
-}): RealtimeMessage {
-  return {
-    id: m.id,
-    conversationId: m.conversationId,
-    senderId: m.senderId,
-    content: m.content,
-    createdAt: m.createdAt.toISOString(),
-    editedAt: m.editedAt?.toISOString() ?? null,
-    deletedAt: m.deletedAt?.toISOString() ?? null,
-    kind: m.kind,
-    targetUserIds: m.targetUserIds,
-    sender: m.sender,
-    // Nunca se envía storagePath: la descarga siempre pasa por /api/upload/[id].
-    attachments: m.attachments.map((a) => ({
-      id: a.id,
-      fileName: a.fileName,
-      fileType: a.fileType,
-      fileSize: a.fileSize,
-    })),
-  };
-}
+/**
+ * Convierte un mensaje de Prisma (con sender y attachments) al formato de red.
+ * El contenido ya viene cifrado desde el cliente; aquí nunca se descifra nada.
+ */
+export const toRealtimeMessage: (m: Parameters<typeof toWireMessage>[0]) => RealtimeMessage =
+  toWireMessage;
 
 async function publishToUsers(userIds: string[], event: InboxEvent): Promise<void> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;

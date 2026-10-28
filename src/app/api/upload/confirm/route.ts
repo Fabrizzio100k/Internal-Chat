@@ -2,33 +2,29 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { verifyUploadedObject, MAX_FILE_SIZE_BYTES } from "@/lib/storage";
-import { publishToConversation, toRealtimeMessage } from "@/lib/realtime-server";
+import { verifyUploadedObject, MAX_ENCRYPTED_FILE_BYTES, isValidAttachmentRef } from "@/lib/storage";
+import { publishToConversation } from "@/lib/realtime-server";
+import {
+  MESSAGE_INCLUDE,
+  toWireMessage,
+  validateEncryptedPayload,
+} from "@/lib/messages-server";
 
 /**
- * Segundo paso de la subida de adjuntos: el navegador ya subió cada archivo
- * directo a S3 usando las URLs firmadas de /api/upload/presign. Aquí se
- * verifica con S3 (HeadObject) que cada objeto realmente existe y que su
- * tamaño coincide con lo declarado —el servidor nunca vio los archivos, así
- * que no puede confiar en los datos del cliente sin esa verificación— y
- * solo entonces se crea UN Message con todos sus Attachments.
+ * Segundo paso de la subida de adjuntos (E2EE): el navegador ya subió cada archivo
+ * CIFRADO directo a S3 usando las URLs de /api/upload/presign. Aquí se verifica con
+ * S3 (HeadObject) que cada objeto existe con el tamaño declarado —el servidor nunca
+ * vio los archivos— y se crea UN mensaje con todos sus adjuntos.
  *
- * Acepta dos formas de payload:
- * - Nueva (recomendada): { conversationId, content?, attachments: [...] }
- *   crea un único mensaje con N adjuntos (y opcionalmente texto), como Discord.
- * - Antigua (retrocompat): { conversationId, storagePath, fileName, ... }
- *   crea un mensaje con un solo adjunto.
+ * El texto, los nombres, tipos y claves de los archivos viajan dentro de `ciphertext`
+ * (cifrado en el navegador); el servidor solo conoce el `ref` y el tamaño cifrado.
+ *
+ * Payload: { conversationId, ciphertext, keyEpoch, attachments: [{ ref, encSize }] }
  */
 
-type IncomingAttachment = {
-  storagePath: string;
-  fileName: string;
-  fileType?: string;
-  fileSize: number;
-};
+type IncomingAttachment = { ref: string; encSize: number };
 
 const MAX_ATTACHMENTS_PER_MESSAGE = 10;
-const MAX_MESSAGE_LENGTH = 5000;
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -43,18 +39,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "conversationId requerido" }, { status: 400 });
   }
 
-  // Normaliza ambos formatos de payload a un array de adjuntos.
-  const rawAttachments: unknown[] = Array.isArray(body?.attachments)
-    ? body.attachments
-    : [
-        {
-          storagePath: body?.storagePath,
-          fileName: body?.fileName,
-          fileType: body?.fileType,
-          fileSize: body?.fileSize,
-        },
-      ];
-
+  const rawAttachments: unknown[] = Array.isArray(body?.attachments) ? body.attachments : [];
   if (rawAttachments.length === 0) {
     return NextResponse.json({ error: "Se requiere al menos un adjunto" }, { status: 400 });
   }
@@ -65,42 +50,21 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Texto opcional que acompaña a los adjuntos (como el caption de WhatsApp).
-  let content: string | null = null;
-  if (typeof body?.content === "string") {
-    const trimmed = body.content.trim();
-    if (trimmed.length > MAX_MESSAGE_LENGTH) {
-      return NextResponse.json({ error: "El mensaje es demasiado largo" }, { status: 400 });
-    }
-    content = trimmed.length > 0 ? trimmed : null;
-  }
-
   const attachments: IncomingAttachment[] = [];
+  const seenRefs = new Set<string>();
   for (const item of rawAttachments) {
-    const a = item as Record<string, unknown>;
-    const storagePath = a.storagePath;
-    const fileName = a.fileName;
-    const fileSize = a.fileSize;
-    const fileType = a.fileType;
-
-    if (typeof storagePath !== "string" || !storagePath.startsWith(`${conversationId}/`)) {
-      return NextResponse.json({ error: "storagePath inválido" }, { status: 400 });
+    const a = (item ?? {}) as Record<string, unknown>;
+    if (!isValidAttachmentRef(a.ref) || seenRefs.has(a.ref)) {
+      return NextResponse.json({ error: "ref inválido" }, { status: 400 });
     }
-    if (typeof fileName !== "string" || !fileName) {
-      return NextResponse.json({ error: "fileName requerido" }, { status: 400 });
+    if (typeof a.encSize !== "number" || !Number.isInteger(a.encSize) || a.encSize <= 0) {
+      return NextResponse.json({ error: "encSize inválido" }, { status: 400 });
     }
-    if (typeof fileSize !== "number" || !Number.isFinite(fileSize) || fileSize <= 0) {
-      return NextResponse.json({ error: "fileSize inválido" }, { status: 400 });
-    }
-    if (fileSize > MAX_FILE_SIZE_BYTES) {
+    if (a.encSize > MAX_ENCRYPTED_FILE_BYTES) {
       return NextResponse.json({ error: "El archivo supera el límite de 20MB" }, { status: 413 });
     }
-    attachments.push({
-      storagePath,
-      fileName,
-      fileSize,
-      fileType: typeof fileType === "string" && fileType ? fileType : "application/octet-stream",
-    });
+    seenRefs.add(a.ref);
+    attachments.push({ ref: a.ref, encSize: a.encSize });
   }
 
   // Repite la validación de pertenencia: no confiar en que el paso de
@@ -112,10 +76,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No tienes acceso a esta conversación" }, { status: 403 });
   }
 
+  const check = await validateEncryptedPayload(conversationId, body?.ciphertext, body?.keyEpoch);
+  if (!check.ok) {
+    const status = check.code ? 409 : 400;
+    return NextResponse.json({ error: check.error, code: check.code }, { status });
+  }
+
   // Verifica en S3 que todos los objetos existan con el tamaño declarado
   // antes de crear nada en la base de datos.
   const verifications = await Promise.all(
-    attachments.map((a) => verifyUploadedObject(a.storagePath, a.fileSize)),
+    attachments.map((a) => verifyUploadedObject(`${conversationId}/${a.ref}`, a.encSize)),
   );
   if (verifications.some((ok) => !ok)) {
     return NextResponse.json(
@@ -128,24 +98,22 @@ export async function POST(request: NextRequest) {
     data: {
       conversationId,
       senderId: session.userId,
-      content,
+      ciphertext: body.ciphertext,
+      keyEpoch: body.keyEpoch,
       attachments: {
         create: attachments.map((a) => ({
           uploaderId: session.userId,
-          fileName: a.fileName,
-          fileType: a.fileType ?? "application/octet-stream",
-          fileSize: a.fileSize,
-          storagePath: a.storagePath,
+          storagePath: `${conversationId}/${a.ref}`,
+          ref: a.ref,
+          encSize: a.encSize,
         })),
       },
     },
-    include: { attachments: true, sender: { select: { id: true, username: true } } },
+    include: MESSAGE_INCLUDE,
   });
 
-  publishToConversation(conversationId, {
-    type: "message",
-    message: toRealtimeMessage(message),
-  });
+  const wire = toWireMessage(message);
+  publishToConversation(conversationId, { type: "message", message: wire });
 
-  return NextResponse.json({ success: true, message });
+  return NextResponse.json({ success: true, message: wire });
 }

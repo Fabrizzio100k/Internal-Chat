@@ -1,15 +1,14 @@
 "use client";
 
-import { useActionState, useEffect, useTransition } from "react";
+import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { registerSchema, type RegisterInput } from "@/lib/validations/auth";
-import { registerAction } from "@/lib/actions/auth";
+import { registerAccount } from "@/lib/e2ee/account";
 import { LAUNCHER_ROUTE } from "@/lib/app-routes";
-import type { AuthActionResult } from "@/lib/types/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,19 +21,10 @@ import {
   CardFooter,
 } from "@/components/ui/card";
 
-const initialState: AuthActionResult = { success: false };
-
 export function RegisterForm() {
-  const [state, formAction] = useActionState(registerAction, initialState);
+  const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
-
-  useEffect(() => {
-    if (state.success) {
-      router.push(LAUNCHER_ROUTE);
-      router.refresh();
-    }
-  }, [state.success, router]);
 
   const {
     register,
@@ -44,12 +34,18 @@ export function RegisterForm() {
     resolver: zodResolver(registerSchema),
   });
 
+  // Las claves de cifrado se generan aquí, en el navegador, y se guardan en el servidor
+  // ya cifradas con tu contraseña. El servidor nunca ve la contraseña ni tus claves.
   const onValid = (data: RegisterInput) => {
-    const formData = new FormData();
-    formData.set("username", data.username);
-    formData.set("password", data.password);
-    startTransition(() => {
-      formAction(formData);
+    setError(null);
+    startTransition(async () => {
+      const result = await registerAccount(data.username, data.password);
+      if (result.success) {
+        router.push(LAUNCHER_ROUTE);
+        router.refresh();
+      } else {
+        setError(result.error ?? "No se pudo crear la cuenta");
+      }
     });
   };
 
@@ -91,13 +87,14 @@ export function RegisterForm() {
                 <p className="text-xs text-destructive">{errors.password.message}</p>
               )}
             </div>
-            {state.error && (
+            {error && (
               <motion.p
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
+                role="alert"
                 className="text-sm text-destructive"
               >
-                {state.error}
+                {error}
               </motion.p>
             )}
           </CardContent>

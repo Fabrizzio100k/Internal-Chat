@@ -4,10 +4,20 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
-export const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024; // 20MB, debe coincidir con cualquier límite configurado en el bucket
+export const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024; // 20MB de archivo en claro
+// El blob cifrado añade iv (12) + etiqueta GCM (16) al archivo original.
+export const MAX_ENCRYPTED_FILE_BYTES = MAX_FILE_SIZE_BYTES + 28;
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** `ref` de un adjunto cifrado: un UUID aleatorio generado en el navegador. */
+export function isValidAttachmentRef(value: unknown): value is string {
+  return typeof value === "string" && UUID_PATTERN.test(value);
+}
 
 const SIGNED_URL_EXPIRY_SECONDS = 60 * 5; // 5 minutos
 const UPLOAD_URL_EXPIRY_SECONDS = 60 * 5; // 5 minutos para completar la subida
@@ -108,6 +118,20 @@ export async function verifyUploadedObject(
     );
     return result.ContentLength === expectedContentLength;
   } catch {
+    return false;
+  }
+}
+
+/**
+ * Borra un objeto del bucket (best effort). Se usa al migrar un adjunto antiguo en
+ * claro a su versión cifrada: el original en claro no debe quedar en S3.
+ */
+export async function deleteStoredObject(key: string): Promise<boolean> {
+  try {
+    await getS3Client().send(new DeleteObjectCommand({ Bucket: getBucketName(), Key: key }));
+    return true;
+  } catch (error) {
+    console.error("[storage] no se pudo borrar el objeto antiguo:", key, error);
     return false;
   }
 }

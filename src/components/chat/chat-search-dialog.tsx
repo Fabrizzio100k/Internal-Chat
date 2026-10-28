@@ -12,10 +12,44 @@ import {
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatBytes } from "@/lib/format";
-import { searchChatAction, type SearchResults } from "@/lib/actions/search";
+import { listConversationsAction } from "@/lib/actions/chat";
+import {
+  getIndexStatus,
+  searchLocal,
+  subscribeIndexStatus,
+  type IndexStatus,
+  type LocalSearchResults,
+  type SearchFileHit,
+  type SearchMessageHit,
+} from "@/lib/e2ee/search-index";
+import { getActiveIdentity } from "@/lib/e2ee/session";
 
-const DEBOUNCE_MS = 250;
+const DEBOUNCE_MS = 200;
+
+type SearchMessageRow = SearchMessageHit & { conversationTitle: string; isGroup: boolean };
+type SearchFileRow = SearchFileHit & { conversationTitle: string; isGroup: boolean };
+type SearchResults = { messages: SearchMessageRow[]; files: SearchFileRow[] };
 const EMPTY: SearchResults = { messages: [], files: [] };
+
+/** Une los resultados del índice local con el título del chat (los títulos no son secretos para este usuario). */
+function withTitles(
+  results: LocalSearchResults,
+  chats: Map<string, { title: string; isGroup: boolean }>,
+): SearchResults {
+  const info = (id: string) => chats.get(id) ?? { title: "Conversación", isGroup: false };
+  return {
+    messages: results.messages.map((m) => ({
+      ...m,
+      conversationTitle: info(m.conversationId).title,
+      isGroup: info(m.conversationId).isGroup,
+    })),
+    files: results.files.map((f) => ({
+      ...f,
+      conversationTitle: info(f.conversationId).title,
+      isGroup: info(f.conversationId).isGroup,
+    })),
+  };
+}
 
 const dateFormatter = new Intl.DateTimeFormat([], {
   day: "2-digit",
@@ -80,11 +114,31 @@ function ChatSearchDialogInner({
   const [onlyCurrent, setOnlyCurrent] = useState(false);
   const [results, setResults] = useState<SearchResults>(EMPTY);
   const [isLoading, setIsLoading] = useState(false);
+  const [indexStatus, setIndexStatus] = useState<IndexStatus>(getIndexStatus());
   const requestIdRef = useRef(0);
+  const chatsRef = useRef<Map<string, { title: string; isGroup: boolean }>>(new Map());
 
   const scopeId = scopedConversationId ?? (onlyCurrent ? activeConversationId : undefined);
   const trimmed = query.trim();
   const isSearchable = trimmed.length >= 2;
+
+  // La búsqueda es LOCAL (índice descifrado en este navegador): el servidor no puede
+  // leer los mensajes cifrados. Se muestra el avance mientras se completa el índice.
+  useEffect(() => subscribeIndexStatus(setIndexStatus), []);
+
+  // Títulos de los chats, para rotular los resultados.
+  useEffect(() => {
+    let cancelled = false;
+    listConversationsAction()
+      .then((list) => {
+        if (cancelled) return;
+        chatsRef.current = new Map(list.map((c) => [c.id, { title: c.title, isGroup: c.isGroup }]));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!isSearchable) {
@@ -94,11 +148,13 @@ function ChatSearchDialogInner({
 
     const requestId = ++requestIdRef.current;
     const timer = setTimeout(() => {
+      const identity = getActiveIdentity();
+      if (!identity) return;
       setIsLoading(true);
-      searchChatAction(trimmed, scopeId)
+      searchLocal(identity.userId, trimmed, scopeId)
         .then((res) => {
           // Descarta respuestas viejas si el usuario siguió escribiendo.
-          if (requestId === requestIdRef.current) setResults(res);
+          if (requestId === requestIdRef.current) setResults(withTitles(res, chatsRef.current));
         })
         .catch(() => {
           if (requestId === requestIdRef.current) setResults(EMPTY);
@@ -109,7 +165,8 @@ function ChatSearchDialogInner({
     }, DEBOUNCE_MS);
 
     return () => clearTimeout(timer);
-  }, [isSearchable, trimmed, scopeId]);
+    // `indexStatus.done` re-ejecuta la búsqueda cuando el indexado avanza.
+  }, [isSearchable, trimmed, scopeId, indexStatus.done]);
 
   // Con menos de 2 letras no se muestran resultados previos.
   const shown = isSearchable ? results : EMPTY;
@@ -122,7 +179,8 @@ function ChatSearchDialogInner({
           <DialogDescription>
             {scopedConversationId
               ? "Mensajes y archivos de esta conversación."
-              : "Mensajes y archivos de tus conversaciones."}
+              : "Mensajes y archivos de tus conversaciones."}{" "}
+            La búsqueda se hace en tu dispositivo: los mensajes cifrados no se pueden leer en el servidor.
           </DialogDescription>
         </DialogHeader>
 
@@ -148,6 +206,14 @@ function ChatSearchDialogInner({
             />
             Solo en la conversación actual
           </label>
+        )}
+
+        {indexStatus.running && (
+          <p className="flex items-center gap-2 text-xs text-muted-foreground" role="status">
+            <Loader2 className="size-3 animate-spin" />
+            Indexando tu historial ({indexStatus.done}/{indexStatus.total} chats). Los resultados
+            irán apareciendo.
+          </p>
         )}
 
         <Tabs defaultValue="messages" className="flex min-h-0 flex-1 flex-col">

@@ -1,13 +1,26 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
 
+export type ConversationLastMessage = {
+  /** Texto en claro: solo mensajes de sistema o previos al E2EE. */
+  content: string | null;
+  /** E2EE: el cliente lo descifra para mostrar la vista previa. */
+  ciphertext: string | null;
+  keyEpoch: number | null;
+  senderId: string;
+  kind: string | null;
+  deleted: boolean;
+  hasAttachments: boolean;
+  createdAt: Date;
+};
+
 export type ConversationItem = {
   id: string;
   isGroup: boolean;
   title: string;
   otherUser: { id: string; username: string } | null;
   members: { id: string; username: string }[];
-  lastMessage: { content: string | null; createdAt: Date } | null;
+  lastMessage: ConversationLastMessage | null;
   unreadCount: number;
 };
 
@@ -37,7 +50,16 @@ export async function loadConversationItems(
           messages: {
             orderBy: { createdAt: "desc" },
             take: 1,
-            select: { content: true, createdAt: true },
+            select: {
+              content: true,
+              ciphertext: true,
+              keyEpoch: true,
+              senderId: true,
+              kind: true,
+              deletedAt: true,
+              createdAt: true,
+              _count: { select: { attachments: true } },
+            },
           },
         },
       },
@@ -64,13 +86,25 @@ export async function loadConversationItems(
     const members = conversation.participants.map((p) => p.user);
     const other = conversation.participants.find((p) => p.userId !== userId)?.user;
     const otherUser = conversation.isGroup ? null : (other ?? { id: "", username: "Usuario" });
+    const last = conversation.messages[0];
     return {
       id: conversationId,
       isGroup: conversation.isGroup,
       title: conversation.isGroup ? (conversation.name ?? "Grupo") : (otherUser?.username ?? "Usuario"),
       otherUser,
       members,
-      lastMessage: conversation.messages[0] ?? null,
+      lastMessage: last
+        ? {
+            content: last.content,
+            ciphertext: last.ciphertext,
+            keyEpoch: last.keyEpoch,
+            senderId: last.senderId,
+            kind: last.kind,
+            deleted: last.deletedAt !== null,
+            hasAttachments: last._count.attachments > 0,
+            createdAt: last.createdAt,
+          }
+        : null,
       unreadCount: unread.get(conversationId) ?? 0,
     };
   });

@@ -8,8 +8,13 @@ import {
   type EditMessageResult,
   type DeleteMessageResult,
 } from "@/lib/types/messages";
-import { listMessagesPageUnchecked, MESSAGE_INCLUDE } from "@/lib/messages-server";
-import { publishToConversation, toRealtimeMessage } from "@/lib/realtime-server";
+import {
+  listMessagesPageUnchecked,
+  MESSAGE_INCLUDE,
+  toWireMessage,
+  validateEncryptedPayload,
+} from "@/lib/messages-server";
+import { publishToConversation } from "@/lib/realtime-server";
 import { checkRateLimit } from "@/lib/rate-limit";
 
 // Spam de mensajes: máximo 20 mensajes por minuto por IP.
@@ -41,7 +46,8 @@ async function assertParticipant(conversationId: string, userId: string) {
  * Sin `cursor`: devuelve los MESSAGES_PAGE_SIZE (50) mensajes más recientes.
  * Con `cursor` (ISO date del mensaje más antiguo ya cargado): devuelve los
  * siguientes 50 mensajes anteriores a esa fecha (para "cargar más" al scrollear arriba).
- * Los mensajes se devuelven en orden ascendente (más antiguo primero) listos para renderizar.
+ * Los mensajes se devuelven en orden ascendente (más antiguo primero) y CIFRADOS:
+ * el navegador los descifra.
  */
 export async function listMessagesAction(
   conversationId: string,
@@ -52,10 +58,14 @@ export async function listMessagesAction(
   return listMessagesPageUnchecked(conversationId, cursor);
 }
 
-/** Envía un mensaje de texto a una conversación. La notificación en vivo la hace Supabase Realtime. */
+/**
+ * Envía un mensaje YA CIFRADO por el cliente. El servidor lo guarda tal cual y lo
+ * reenvía a los participantes; no tiene la clave para leerlo.
+ */
 export async function sendMessageAction(
   conversationId: string,
-  content: string,
+  ciphertext: string,
+  keyEpoch: number,
 ): Promise<SendMessageResult> {
   const session = await requireSession();
   await assertParticipant(conversationId, session.userId);
@@ -72,19 +82,15 @@ export async function sendMessageAction(
     };
   }
 
-  const trimmed = content.trim();
-  if (!trimmed) {
-    return { success: false, error: "El mensaje no puede estar vacío" };
-  }
-  if (trimmed.length > 5000) {
-    return { success: false, error: "El mensaje es demasiado largo" };
-  }
+  const check = await validateEncryptedPayload(conversationId, ciphertext, keyEpoch);
+  if (!check.ok) return { success: false, error: check.error, code: check.code };
 
   const message = await prisma.message.create({
     data: {
       conversationId,
       senderId: session.userId,
-      content: trimmed,
+      ciphertext,
+      keyEpoch,
     },
     include: MESSAGE_INCLUDE,
   });
@@ -92,21 +98,21 @@ export async function sendMessageAction(
   // Tiempo real: se publica a los participantes después de responder (after()).
   publishToConversation(conversationId, {
     type: "message",
-    message: toRealtimeMessage(message),
+    message: toWireMessage(message),
   });
 
   return { success: true, messageId: message.id };
 }
 
 /**
- * Edita el contenido de un mensaje propio. Solo el autor puede editarlo, y
- * solo si no fue eliminado. Marca `editedAt` para que la UI pueda mostrar
- * la etiqueta "(editado)". No se permite editar mensajes que son solo
- * adjuntos (sin contenido de texto).
+ * Reemplaza el contenido cifrado de un mensaje propio. Solo el autor puede
+ * editarlo, y solo si no fue eliminado. Marca `editedAt` para que la UI pueda
+ * mostrar "(editado)". No se permite editar mensajes con adjuntos.
  */
 export async function editMessageAction(
   messageId: string,
-  content: string,
+  ciphertext: string,
+  keyEpoch: number,
 ): Promise<EditMessageResult> {
   const session = await requireSession();
 
@@ -124,25 +130,22 @@ export async function editMessageAction(
     return { success: false, error: "No se pueden editar mensajes con archivos adjuntos" };
   }
 
-  const trimmed = content.trim();
-  if (!trimmed) {
-    return { success: false, error: "El mensaje no puede estar vacío" };
-  }
-  if (trimmed.length > 5000) {
-    return { success: false, error: "El mensaje es demasiado largo" };
-  }
+  const check = await validateEncryptedPayload(message.conversationId, ciphertext, keyEpoch);
+  if (!check.ok) return { success: false, error: check.error, code: check.code };
 
   const editedAt = new Date();
+  // Si era un mensaje antiguo en claro, al editarlo queda cifrado (content = null).
   await prisma.message.update({
     where: { id: messageId },
-    data: { content: trimmed, editedAt },
+    data: { ciphertext, keyEpoch, content: null, editedAt },
   });
 
   publishToConversation(message.conversationId, {
     type: "message_updated",
     conversationId: message.conversationId,
     messageId,
-    content: trimmed,
+    ciphertext,
+    keyEpoch,
     editedAt: editedAt.toISOString(),
   });
 
@@ -169,7 +172,7 @@ export async function deleteMessageAction(messageId: string): Promise<DeleteMess
   const deletedAt = new Date();
   await prisma.message.update({
     where: { id: messageId },
-    data: { content: null, deletedAt },
+    data: { content: null, ciphertext: null, deletedAt },
   });
 
   publishToConversation(message.conversationId, {

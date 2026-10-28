@@ -5,6 +5,7 @@ import { getSession } from "@/lib/auth";
 import type { ActionResult } from "@/lib/types/chat";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { loadContacts, loadConversationItems } from "@/lib/conversations-server";
+import { findUsersWithoutKeys } from "@/lib/keys-server";
 import { MESSAGE_INCLUDE } from "@/lib/messages-server";
 import {
   publishToConversation,
@@ -222,6 +223,14 @@ export async function createGroupAction(name: string, memberIds: string[]): Prom
   const allowed = new Set((await loadContacts(session.userId)).map((c) => c.id));
   if (uniqueIds.some((id) => !allowed.has(id))) {
     return { success: false, error: "Solo puedes añadir a personas con las que ya chateas" };
+  }
+
+  const missingKeys = await findUsersWithoutKeys([session.userId, ...uniqueIds]);
+  if (missingKeys.length > 0) {
+    return {
+      success: false,
+      error: `${missingKeys.join(", ")} aún no activó el cifrado (debe iniciar sesión una vez).`,
+    };
   }
 
   const conversation = await prisma.$transaction(async (tx) => {

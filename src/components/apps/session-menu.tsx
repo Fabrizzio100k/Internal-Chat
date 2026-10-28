@@ -6,7 +6,7 @@ import { LogOut } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { logoutAction } from "@/lib/actions/auth";
+import { signOut } from "@/lib/e2ee/account";
 
 export function SessionMenu({ username }: { username: string }) {
   const router = useRouter();
@@ -27,7 +27,7 @@ export function SessionMenu({ username }: { username: string }) {
         disabled={isPending}
         onClick={() => {
           startTransition(async () => {
-            await logoutAction();
+            await signOut();
             router.push("/login");
           });
         }}

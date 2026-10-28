@@ -23,7 +23,9 @@ import {
   acceptChatRequestAction,
   rejectChatRequestAction,
 } from "@/lib/actions/chat";
-import { logoutAction } from "@/lib/actions/auth";
+import { signOut } from "@/lib/e2ee/account";
+import { decryptPreview } from "@/lib/e2ee/messages";
+import type { ConversationItem } from "@/lib/conversations-server";
 import { LAUNCHER_ROUTE } from "@/lib/app-routes";
 import { toast } from "sonner";
 import { usePresence } from "@/hooks/use-presence";
@@ -36,16 +38,6 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { useInboxHandler } from "@/hooks/use-inbox";
 import { CreateGroupDialog } from "@/components/chat/create-group-dialog";
 import { ChatSearchDialog } from "@/components/chat/chat-search-dialog";
-
-type ConversationItem = {
-  id: string;
-  isGroup: boolean;
-  title: string;
-  otherUser: { id: string; username: string } | null;
-  members: { id: string; username: string }[];
-  lastMessage: { content: string | null; createdAt: Date } | null;
-  unreadCount: number;
-};
 
 type PendingRequestItem = {
   id: string;
@@ -61,12 +53,15 @@ type SessionUser = { userId: string; username: string };
  */
 const ConversationRow = memo(function ConversationRow({
   conversation,
+  preview,
   isActive,
   isOnline,
   isTyping,
   onOpen,
 }: {
   conversation: ConversationItem;
+  /** Vista previa del último mensaje, ya descifrada en el navegador. */
+  preview: string | undefined;
   isActive: boolean;
   isOnline: boolean;
   isTyping: boolean;
@@ -112,8 +107,7 @@ const ConversationRow = memo(function ConversationRow({
               unreadLabel ? "font-medium text-foreground" : "text-muted-foreground",
             )}
           >
-            {conversation.lastMessage?.content ??
-              (conversation.lastMessage ? "Archivo adjunto" : "Sin mensajes aún")}
+            {conversation.lastMessage ? (preview ?? "…") : "Sin mensajes aún"}
           </span>
         )}
       </div>
@@ -155,6 +149,23 @@ export function ChatSidebar({
   );
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestSearchQueryRef = useRef("");
+
+  // Vistas previas del último mensaje: el servidor solo tiene texto cifrado, así que
+  // se descifran aquí. Se recalculan únicamente cuando cambia el último mensaje.
+  const [previews, setPreviews] = useState<Record<string, string>>({});
+  const previewStampsRef = useRef(new Map<string, string>());
+  useEffect(() => {
+    for (const conversation of conversations) {
+      const last = conversation.lastMessage;
+      if (!last) continue;
+      const stamp = `${new Date(last.createdAt).getTime()}:${last.ciphertext?.length ?? 0}:${last.deleted}`;
+      if (previewStampsRef.current.get(conversation.id) === stamp) continue;
+      previewStampsRef.current.set(conversation.id, stamp);
+      decryptPreview(conversation.id, last)
+        .then((text) => setPreviews((prev) => ({ ...prev, [conversation.id]: text })))
+        .catch(() => {});
+    }
+  }, [conversations]);
 
   // Reporta la suma total de no leídos al UnreadTotalProvider, consumido
   // por FaviconBadge para pintar el badge en el ícono de la pestaña. Esto
@@ -234,7 +245,16 @@ export function ChatSidebar({
           if (index === -1) return prev;
           const updated = {
             ...prev[index],
-            lastMessage: { content: m.content, createdAt: new Date(m.createdAt) },
+            lastMessage: {
+              content: m.content,
+              ciphertext: m.ciphertext,
+              keyEpoch: m.keyEpoch,
+              senderId: m.senderId,
+              kind: m.kind,
+              deleted: m.deletedAt !== null,
+              hasAttachments: m.attachments.length > 0,
+              createdAt: new Date(m.createdAt),
+            },
             unreadCount: isFromMe || isOpen ? prev[index].unreadCount : prev[index].unreadCount + 1,
           };
           return [updated, ...prev.filter((_, i) => i !== index)];
@@ -423,7 +443,7 @@ export function ChatSidebar({
             size="icon-sm"
             onClick={() => {
               startTransition(async () => {
-                await logoutAction();
+                await signOut();
                 router.push("/login");
                 router.refresh();
               });
@@ -523,6 +543,7 @@ export function ChatSidebar({
                 <ConversationRow
                   key={conversation.id}
                   conversation={conversation}
+                  preview={previews[conversation.id]}
                   isActive={activeConversationId === conversation.id}
                   isOnline={
                     conversation.otherUser ? onlineUserIds.has(conversation.otherUser.id) : false

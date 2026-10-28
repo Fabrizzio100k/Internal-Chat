@@ -7,6 +7,13 @@ import type { ActionResult } from "@/lib/types/chat";
 import { MESSAGE_INCLUDE } from "@/lib/messages-server";
 import { publishToConversation, toRealtimeMessage } from "@/lib/realtime-server";
 import type { GroupInfo } from "@/lib/types/groups";
+import type { KeyActionResult, KeyEpochUpdate } from "@/lib/types/e2ee";
+import {
+  epochKeyRows,
+  findUsersWithoutKeys,
+  isKeyEpochUpdate,
+  validateEpochKeys,
+} from "@/lib/keys-server";
 
 const GROUP_NAME_MAX = 60;
 const GROUP_MAX_MEMBERS = 50;
@@ -24,6 +31,7 @@ async function loadGroupFor(conversationId: string, userId: string) {
     select: {
       isGroup: true,
       name: true,
+      currentEpoch: true,
       participants: {
         orderBy: { joinedAt: "asc" },
         select: {
@@ -72,10 +80,16 @@ export async function listAddableContactsAction(conversationId: string) {
   return (await loadContacts(session.userId)).filter((c) => !inGroup.has(c.id));
 }
 
+/**
+ * Añade miembros. Con E2EE el admin (que tiene la clave) reparte en la misma
+ * llamada una época NUEVA a todos los miembros resultantes: los nuevos no pueden
+ * leer lo anterior a su ingreso, y la clave vieja deja de usarse.
+ */
 export async function addGroupMembersAction(
   conversationId: string,
   userIds: string[],
-): Promise<ActionResult> {
+  keyUpdate: KeyEpochUpdate,
+): Promise<KeyActionResult> {
   const session = await requireSession();
   const group = await loadGroupFor(conversationId, session.userId);
   if (!group) return NOT_FOUND;
@@ -94,12 +108,36 @@ export async function addGroupMembersAction(
     return { success: false, error: "Solo puedes añadir a personas con las que ya chateas" };
   }
 
-  const [, addedMessage] = await prisma.$transaction([
-    prisma.conversationParticipant.createMany({
+  const currentEpoch = group.conversation.currentEpoch;
+  if (!isKeyEpochUpdate(keyUpdate) || keyUpdate.epoch !== currentEpoch + 1) {
+    return { success: false, stale: true, error: "La clave del grupo cambió. Reintenta." };
+  }
+  const resulting = [...inGroup, ...ids];
+  const missing = await findUsersWithoutKeys(resulting);
+  if (missing.length > 0) {
+    return {
+      success: false,
+      error: `${missing.join(", ")} aún no activó el cifrado (debe iniciar sesión una vez).`,
+      missingKeys: missing,
+    };
+  }
+  const valid = await validateEpochKeys(resulting, keyUpdate.keys);
+  if (!valid.ok) return { success: false, error: valid.error };
+
+  const addedMessage = await prisma.$transaction(async (tx) => {
+    const cas = await tx.conversation.updateMany({
+      where: { id: conversationId, currentEpoch },
+      data: { currentEpoch: keyUpdate.epoch, keyRotationPending: false },
+    });
+    if (cas.count === 0) return null;
+    await tx.conversationParticipant.createMany({
       data: ids.map((userId) => ({ conversationId, userId })),
       skipDuplicates: true,
-    }),
-    prisma.message.create({
+    });
+    await tx.conversationKey.createMany({
+      data: epochKeyRows(conversationId, keyUpdate, session.userId),
+    });
+    return tx.message.create({
       data: {
         conversationId,
         senderId: session.userId,
@@ -108,19 +146,29 @@ export async function addGroupMembersAction(
         targetUserIds: ids,
       },
       include: MESSAGE_INCLUDE,
-    }),
-  ]);
+    });
+  });
+  if (!addedMessage) {
+    return { success: false, stale: true, error: "La clave del grupo cambió. Reintenta." };
+  }
+
   publishToConversation(conversationId, {
     type: "message",
     message: toRealtimeMessage(addedMessage),
   });
+  publishToConversation(conversationId, { type: "keys_updated", conversationId });
   return { success: true };
 }
 
+/**
+ * Expulsa a un miembro y rota la clave: el admin reparte una época nueva SOLO a los
+ * que se quedan, así el expulsado no puede leer nada de lo que se escriba desde ahora.
+ */
 export async function removeGroupMemberAction(
   conversationId: string,
   userId: string,
-): Promise<ActionResult> {
+  keyUpdate: KeyEpochUpdate,
+): Promise<KeyActionResult> {
   const session = await requireSession();
   const group = await loadGroupFor(conversationId, session.userId);
   if (!group) return NOT_FOUND;
@@ -130,10 +178,29 @@ export async function removeGroupMemberAction(
   const target = group.conversation.participants.find((p) => p.userId === userId);
   if (!target) return { success: false, error: "Esa persona ya no está en el grupo" };
 
+  const currentEpoch = group.conversation.currentEpoch;
+  if (!isKeyEpochUpdate(keyUpdate) || keyUpdate.epoch !== currentEpoch + 1) {
+    return { success: false, stale: true, error: "La clave del grupo cambió. Reintenta." };
+  }
+  const remaining = group.conversation.participants
+    .filter((p) => p.userId !== userId)
+    .map((p) => p.userId);
+  const missing = await findUsersWithoutKeys(remaining);
+  if (missing.length > 0) {
+    return { success: false, error: "Hay miembros sin cifrado activo", missingKeys: missing };
+  }
+  const valid = await validateEpochKeys(remaining, keyUpdate.keys);
+  if (!valid.ok) return { success: false, error: valid.error };
+
   // El mensaje se crea ANTES de borrar la fila: así el evento de Realtime llega
   // con targetUserIds y el expulsado sabe que debe quitar el chat de su lista.
-  const [removedMessage] = await prisma.$transaction([
-    prisma.message.create({
+  const removedMessage = await prisma.$transaction(async (tx) => {
+    const cas = await tx.conversation.updateMany({
+      where: { id: conversationId, currentEpoch },
+      data: { currentEpoch: keyUpdate.epoch, keyRotationPending: false },
+    });
+    if (cas.count === 0) return null;
+    const message = await tx.message.create({
       data: {
         conversationId,
         senderId: session.userId,
@@ -142,11 +209,21 @@ export async function removeGroupMemberAction(
         targetUserIds: [userId],
       },
       include: MESSAGE_INCLUDE,
-    }),
-    prisma.conversationParticipant.delete({
+    });
+    await tx.conversationParticipant.delete({
       where: { conversationId_userId: { conversationId, userId } },
-    }),
-  ]);
+    });
+    // El expulsado ya no necesita (ni debe conservar) sus envolturas de clave.
+    await tx.conversationKey.deleteMany({ where: { conversationId, userId } });
+    await tx.conversationKey.createMany({
+      data: epochKeyRows(conversationId, keyUpdate, session.userId),
+    });
+    return message;
+  });
+  if (!removedMessage) {
+    return { success: false, stale: true, error: "La clave del grupo cambió. Reintenta." };
+  }
+
   // El expulsado ya no figura como participante: se le incluye explícitamente
   // para que su sidebar reciba el evento y quite el chat.
   publishToConversation(
@@ -154,6 +231,7 @@ export async function removeGroupMemberAction(
     { type: "message", message: toRealtimeMessage(removedMessage) },
     [userId],
   );
+  publishToConversation(conversationId, { type: "keys_updated", conversationId });
   return { success: true };
 }
 
@@ -181,6 +259,16 @@ export async function leaveGroupAction(conversationId: string): Promise<ActionRe
     prisma.conversationParticipant.delete({
       where: { conversationId_userId: { conversationId, userId: session.userId } },
     }),
+    // Sus envolturas ya no sirven; la clave se renueva en el siguiente cliente que abra el grupo.
+    prisma.conversationKey.deleteMany({ where: { conversationId, userId: session.userId } }),
+    ...(group.conversation.currentEpoch > 0 && others.length > 0
+      ? [
+          prisma.conversation.update({
+            where: { id: conversationId },
+            data: { keyRotationPending: true },
+          }),
+        ]
+      : []),
     ...(needsNewAdmin
       ? [
           prisma.conversationParticipant.update({
