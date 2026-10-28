@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { jwtVerify } from "jose";
-import { SESSION_COOKIE_NAME } from "@/lib/auth";
-import { LAUNCHER_ROUTE, PROTECTED_PREFIXES } from "@/lib/app-routes";
+import { SESSION_COOKIE_NAME } from "@/lib/session-constants";
+import { EXPIRED_PARAM, LAUNCHER_ROUTE, PROTECTED_PREFIXES } from "@/lib/app-routes";
 import { checkEdgeRateLimit } from "@/lib/rate-limit-edge";
 
 const AUTH_PAGES = ["/login", "/register"];
@@ -64,7 +64,11 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
-  if (isAuthPage && hasValidSession) {
+  // Este proxy solo ve la FIRMA del JWT, no si la sesión fue revocada en la BD. Cuando una
+  // página detecta una sesión revocada manda a LOGIN_EXPIRED_ROUTE (?expired=1); ahí no se
+  // redirige de vuelta a la app, o habría un bucle /apps -> /login -> /apps.
+  const sessionExpired = request.nextUrl.searchParams.has(EXPIRED_PARAM);
+  if (isAuthPage && hasValidSession && !sessionExpired) {
     const launcherUrl = new URL(LAUNCHER_ROUTE, request.url);
     return NextResponse.redirect(launcherUrl);
   }

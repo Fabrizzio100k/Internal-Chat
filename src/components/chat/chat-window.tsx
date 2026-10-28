@@ -42,8 +42,7 @@ import {
   decryptWireMessages,
 } from "@/lib/e2ee/messages";
 import { editTextMessage, sendTextMessage } from "@/lib/e2ee/outgoing";
-import { indexMessages } from "@/lib/e2ee/search-index";
-import { deleteSearchDoc } from "@/lib/e2ee/key-store";
+import { removeFromIndex, indexMessages } from "@/lib/e2ee/search-index";
 
 type SessionUser = { userId: string; username: string };
 type Member = { id: string; username: string };
@@ -525,7 +524,7 @@ export function ChatWindow({
         m.id === messageId ? { ...m, content: null, deletedAt: new Date().toISOString() } : m,
       ),
     );
-    deleteSearchDoc(currentUser.userId, messageId).catch(() => {});
+    removeFromIndex(currentUser.userId, messageId).catch(() => {});
   }, [currentUser.userId]);
 
   const headerSubtitle = isRealtimeConnected

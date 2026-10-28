@@ -2,7 +2,8 @@
 
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
-import { createSession, deleteSession, getSession } from "@/lib/auth";
+import { createSession, deleteSession, forgetSessionValidation, getSession } from "@/lib/auth";
+import { APP_VERSION } from "@/lib/version";
 import {
   registerRequestSchema,
   loginRequestSchema,
@@ -58,7 +59,7 @@ export async function registerAction(input: unknown): Promise<AuthActionResult> 
 
   const passwordHash = await bcrypt.hash(authSecret, BCRYPT_ROUNDS);
   const user = await prisma.user.create({
-    data: { username, passwordHash, key: { create: keys } },
+    data: { username, passwordHash, key: { create: keys }, lastSeenVersion: APP_VERSION },
   });
 
   await createSession({ userId: user.id, username: user.username });
@@ -170,5 +171,15 @@ export async function setupKeysAction(input: unknown): Promise<AuthActionResult>
 }
 
 export async function logoutAction() {
+  const session = await getSession().catch(() => null);
+  if (session) {
+    await prisma.userSession
+      .updateMany({
+        where: { id: session.sessionId, userId: session.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      })
+      .catch(() => {});
+    forgetSessionValidation(session.sessionId);
+  }
   await deleteSession();
 }

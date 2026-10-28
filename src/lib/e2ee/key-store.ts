@@ -51,10 +51,16 @@ export type SearchMeta = {
   key: string; // `${ownerId}:${conversationId}`
   ownerId: string;
   conversationId: string;
+  /** Formato del registro. Sin `v: 2` (versión anterior) se reindexa el chat una vez. */
+  v?: number;
   /** createdAt del mensaje más antiguo ya indexado (cursor para seguir hacia atrás). */
   oldestCursor: string | null;
   /** Ya se indexó todo el historial hacia atrás. */
   complete: boolean;
+  /** createdAt del mensaje más nuevo ya sincronizado (punto de partida de la sincronización hacia delante). */
+  latestAt: string | null;
+  /** Última edición/borrado del chat ya aplicado al índice (marca del servidor, sin relojes locales). */
+  changedAt: string | null;
 };
 
 let dbPromise: Promise<IDBDatabase> | null = null;
@@ -154,34 +160,54 @@ export async function deleteSearchDoc(ownerId: string, messageId: string): Promi
   await wrap((await store("search", "readwrite")).delete(`${ownerId}:${messageId}`));
 }
 
-export async function hasSearchDoc(ownerId: string, messageId: string): Promise<boolean> {
-  const found = await wrap((await store("search", "readonly")).getKey(`${ownerId}:${messageId}`));
-  return found !== undefined;
-}
-
-/** Recorre los documentos del usuario (opcionalmente de una conversación). */
-export async function scanSearchDocs(
+/**
+ * Lote de documentos del usuario con paginación por clave (más barato que un cursor
+ * documento a documento y permite ceder el hilo entre lotes). `afterKey` null = desde el principio.
+ */
+export async function getSearchDocBatch(
   ownerId: string,
-  conversationId: string | undefined,
-  visit: (doc: SearchDoc) => void,
-): Promise<void> {
+  afterKey: string | null,
+  count: number,
+): Promise<SearchDoc[]> {
   const s = await store("search", "readonly");
-  const range = conversationId
-    ? IDBKeyRange.only([ownerId, conversationId])
-    : IDBKeyRange.only(ownerId);
-  const index = s.index(conversationId ? "byConversation" : "byOwner");
-  await new Promise<void>((resolve, reject) => {
-    const request = index.openCursor(range);
-    request.onsuccess = () => {
-      const cursor = request.result;
-      if (!cursor) return resolve();
-      visit(cursor.value as SearchDoc);
-      cursor.continue();
-    };
-    request.onerror = () => reject(request.error);
-  });
+  const upper = `${ownerId}:\uffff`;
+  const range = afterKey
+    ? IDBKeyRange.bound(afterKey, upper, true, false)
+    : IDBKeyRange.bound(`${ownerId}:`, upper, false, false);
+  return (await wrap(s.getAll(range, count))) as SearchDoc[];
 }
 
+/** Varios documentos por id en una sola transacción. Los que no existen se omiten. */
+export async function getSearchDocs(ownerId: string, messageIds: string[]): Promise<SearchDoc[]> {
+  if (messageIds.length === 0) return [];
+  const s = await store("search", "readonly");
+  const found = await Promise.all(messageIds.map((id) => wrap(s.get(`${ownerId}:${id}`))));
+  return found.filter((doc): doc is SearchDoc => doc !== undefined);
+}
+
+/** Borra todo lo indexado de una conversación (p. ej. un grupo del que salí). */
+export async function deleteConversationSearch(ownerId: string, conversationId: string): Promise<void> {
+  const db = await openDb();
+  const tx = db.transaction(["search", "searchMeta"], "readwrite");
+  const cursorRequest = tx
+    .objectStore("search")
+    .index("byConversation")
+    .openKeyCursor(IDBKeyRange.only([ownerId, conversationId]));
+  const docs = tx.objectStore("search");
+  cursorRequest.onsuccess = () => {
+    const cursor = cursorRequest.result;
+    if (!cursor) return;
+    docs.delete(cursor.primaryKey);
+    cursor.continue();
+  };
+  tx.objectStore("searchMeta").delete(`${ownerId}:${conversationId}`);
+  await done(tx);
+}
+
+export async function listSearchMeta(ownerId: string): Promise<SearchMeta[]> {
+  const s = await store("searchMeta", "readonly");
+  return (await wrap(s.index("byOwner").getAll(IDBKeyRange.only(ownerId)))) as SearchMeta[];
+}
 export async function getSearchMeta(
   ownerId: string,
   conversationId: string,

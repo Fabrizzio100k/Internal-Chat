@@ -2,7 +2,7 @@
 
 import { onIdentityReset } from "@/lib/e2ee/session";
 import { runLegacyMigration } from "@/lib/e2ee/migrate-legacy";
-import { runSearchIndexer } from "@/lib/e2ee/search-index";
+import { runSearchIndexer, warmSearchEngine } from "@/lib/e2ee/search-index";
 
 /**
  * Tareas en segundo plano tras desbloquear: completar el índice de búsqueda local y
@@ -34,6 +34,10 @@ export function startBackgroundJobs(userId: string): void {
     await sleep(2500);
     if (signal.aborted) return;
     try {
+      // El índice en memoria se arma primero (lee solo IndexedDB, sin red): así la primera
+      // búsqueda ya es instantánea; luego se sincroniza con el servidor.
+      await warmSearchEngine(userId);
+      if (signal.aborted) return;
       await runSearchIndexer(userId, signal);
       if (signal.aborted) return;
       await runLegacyMigration(signal);

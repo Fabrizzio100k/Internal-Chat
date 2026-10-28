@@ -35,10 +35,32 @@ model User {
 
   key UserKey?
 
+  // Última versión de la app cuyo "qué hay de nuevo" ya vio el usuario (no volver a mostrarlo).
+  lastSeenVersion String?
+  sessions        UserSession[]
   receivedConversationKeys ConversationKey[] @relation("KeyRecipient")
   issuedConversationKeys   ConversationKey[] @relation("WrappedKeys")
 
   @@map("users")
+}
+
+// Una fila por inicio de sesión (dispositivo). El JWT de la cookie lleva este id
+// (`sid`): si la fila se revoca o expira, la cookie deja de valer aunque su firma sea válida.
+model UserSession {
+  id         String    @id @default(cuid())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String
+  // "Chrome en Windows": derivado del User-Agent en el servidor.
+  deviceName String
+  deviceType String    @default("desktop")
+  ip         String?
+  createdAt  DateTime  @default(now())
+  lastSeenAt DateTime  @default(now())
+  expiresAt  DateTime
+  revokedAt  DateTime?
+
+  @@index([userId, revokedAt, expiresAt])
+  @@map("user_sessions")
 }
 
 // Claves E2EE del usuario. El servidor SOLO guarda claves públicas y las
@@ -163,6 +185,9 @@ model Message {
   attachments Attachment[]
 
   @@index([conversationId, createdAt])
+  // Sincronización del índice de búsqueda: "¿hubo ediciones/borrados desde X?" sin escanear el chat.
+  @@index([conversationId, editedAt])
+  @@index([conversationId, deletedAt])
   @@map("messages")
 }
 

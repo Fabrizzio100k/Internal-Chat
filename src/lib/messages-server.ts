@@ -192,3 +192,81 @@ export async function listMessagesAroundUnchecked(
   const olderAsc = (hasMore ? older.slice(0, 25) : older).reverse();
   return { messages: [...olderAsc, ...newer].map(toWireMessage), hasMore };
 }
+
+// ---------------------------------------------------------------------------
+// Sincronización del índice de búsqueda local
+// ---------------------------------------------------------------------------
+
+export const SYNC_PAGE_SIZE = 200;
+
+/**
+ * "Cabezas" de cada conversación del usuario: fecha del último mensaje y de la última
+ * edición/borrado. Con ellas el cliente sabe qué chats cambiaron desde su última
+ * sincronización SIN pedir nada más (en reposo: una sola petición para todo).
+ * Cada dato sale de un índice (conversationId, createdAt|editedAt|deletedAt) con LIMIT 1,
+ * así que el coste es O(chats), no O(mensajes).
+ */
+export async function loadSyncHeads(userId: string): Promise<
+  { conversationId: string; latestAt: string | null; changedAt: string | null }[]
+> {
+  const rows = await prisma.$queryRaw<
+    { conversationId: string; latestAt: Date | null; changedAt: Date | null }[]
+  >`
+    SELECT
+      cp."conversationId" AS "conversationId",
+      (SELECT m."createdAt" FROM messages m
+        WHERE m."conversationId" = cp."conversationId"
+        ORDER BY m."createdAt" DESC LIMIT 1) AS "latestAt",
+      GREATEST(
+        (SELECT m."editedAt" FROM messages m
+          WHERE m."conversationId" = cp."conversationId" AND m."editedAt" IS NOT NULL
+          ORDER BY m."editedAt" DESC LIMIT 1),
+        (SELECT m."deletedAt" FROM messages m
+          WHERE m."conversationId" = cp."conversationId" AND m."deletedAt" IS NOT NULL
+          ORDER BY m."deletedAt" DESC LIMIT 1)
+      ) AS "changedAt"
+    FROM conversation_participants cp
+    WHERE cp."userId" = ${userId}
+  `;
+  return rows.map((row) => ({
+    conversationId: row.conversationId,
+    latestAt: row.latestAt?.toISOString() ?? null,
+    changedAt: row.changedAt?.toISOString() ?? null,
+  }));
+}
+
+/** Mensajes creados desde `after` (inclusive), del más antiguo al más nuevo. */
+export async function listMessagesAfterUnchecked(
+  conversationId: string,
+  after: Date,
+): Promise<ListMessagesResult> {
+  const rows = await prisma.message.findMany({
+    where: { conversationId, createdAt: { gte: after } },
+    include,
+    orderBy: { createdAt: "asc" },
+    take: SYNC_PAGE_SIZE + 1,
+  });
+  const hasMore = rows.length > SYNC_PAGE_SIZE;
+  return { messages: (hasMore ? rows.slice(0, SYNC_PAGE_SIZE) : rows).map(toWireMessage), hasMore };
+}
+
+/**
+ * Mensajes editados o eliminados después de `since`. `hasMore` = hay más cambios de los
+ * que caben en una página: el cliente prefiere reindexar el chat entero antes que arriesgar un hueco.
+ */
+export async function listChangedMessagesUnchecked(
+  conversationId: string,
+  since: Date,
+): Promise<ListMessagesResult> {
+  const rows = await prisma.message.findMany({
+    where: {
+      conversationId,
+      OR: [{ editedAt: { gt: since } }, { deletedAt: { gt: since } }],
+    },
+    include,
+    orderBy: { createdAt: "asc" },
+    take: SYNC_PAGE_SIZE + 1,
+  });
+  const hasMore = rows.length > SYNC_PAGE_SIZE;
+  return { messages: (hasMore ? rows.slice(0, SYNC_PAGE_SIZE) : rows).map(toWireMessage), hasMore };
+}

@@ -208,7 +208,7 @@ function ChatSearchDialogInner({
           </label>
         )}
 
-        {indexStatus.running && (
+        {indexStatus.running && indexStatus.total > 0 && (
           <p className="flex items-center gap-2 text-xs text-muted-foreground" role="status">
             <Loader2 className="size-3 animate-spin" />
             Indexando tu historial ({indexStatus.done}/{indexStatus.total} chats). Los resultados

@@ -1,8 +1,12 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+import { LOGIN_EXPIRED_ROUTE } from "@/lib/app-routes";
 import { AppLauncher } from "@/components/apps/app-launcher";
 import { SessionMenu } from "@/components/apps/session-menu";
+import { SessionGuard } from "@/components/app/session-guard";
+import { WhatsNewDialog } from "@/components/app/whats-new-dialog";
 
 export const metadata: Metadata = {
   title: "Apps internas",
@@ -12,11 +16,18 @@ export const metadata: Metadata = {
 export default async function AppsPage() {
   const session = await getSession();
   if (!session) {
-    redirect("/login");
+    redirect(LOGIN_EXPIRED_ROUTE);
   }
+
+  const versionRow = await prisma.user.findUnique({
+    where: { id: session.userId },
+    select: { lastSeenVersion: true },
+  });
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
+      <SessionGuard />
+      <WhatsNewDialog userId={session.userId} lastSeenVersion={versionRow?.lastSeenVersion ?? null} />
       <header className="flex items-center justify-between gap-4 border-b px-4 py-3 sm:px-6">
         <div className="min-w-0">
           <h1 className="font-heading text-base leading-tight font-medium">Apps internas</h1>

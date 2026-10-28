@@ -1,8 +1,12 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+import { LOGIN_EXPIRED_ROUTE } from "@/lib/app-routes";
 import { listConversationsAction, listPendingRequestsAction } from "@/lib/actions/chat";
 import { inboxTopic } from "@/lib/realtime-server";
 import { ChatSidebar } from "@/components/chat/chat-sidebar";
+import { SessionGuard } from "@/components/app/session-guard";
+import { WhatsNewDialog } from "@/components/app/whats-new-dialog";
 import { PresenceProvider } from "@/hooks/use-presence";
 import { InboxProvider } from "@/hooks/use-inbox";
 import { UnreadTotalProvider } from "@/hooks/use-unread-total";
@@ -14,12 +18,16 @@ import { E2eeInboxSync } from "@/components/e2ee/e2ee-inbox-sync";
 export default async function ChatLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
   if (!session) {
-    redirect("/login");
+    redirect(LOGIN_EXPIRED_ROUTE);
   }
 
-  const [conversations, pendingRequests] = await Promise.all([
+  const [conversations, pendingRequests, versionRow] = await Promise.all([
     listConversationsAction(),
     listPendingRequestsAction(),
+    prisma.user.findUnique({
+      where: { id: session.userId },
+      select: { lastSeenVersion: true },
+    }),
   ]);
 
   return (
@@ -30,6 +38,11 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
           <UnreadTotalProvider>
             <SidebarProvider>
               <FaviconBadge />
+              <SessionGuard />
+              <WhatsNewDialog
+                userId={session.userId}
+                lastSeenVersion={versionRow?.lastSeenVersion ?? null}
+              />
               <div className="flex h-dvh overflow-hidden bg-background">
                 <ChatSidebar
                   currentUser={session}

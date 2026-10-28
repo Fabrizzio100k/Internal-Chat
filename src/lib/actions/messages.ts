@@ -10,6 +10,9 @@ import {
 } from "@/lib/types/messages";
 import {
   listMessagesPageUnchecked,
+  listMessagesAfterUnchecked,
+  listChangedMessagesUnchecked,
+  loadSyncHeads,
   MESSAGE_INCLUDE,
   toWireMessage,
   validateEncryptedPayload,
@@ -56,6 +59,47 @@ export async function listMessagesAction(
   const session = await requireSession();
   await assertParticipant(conversationId, session.userId);
   return listMessagesPageUnchecked(conversationId, cursor);
+}
+
+/**
+ * Cabezas de todas mis conversaciones (último mensaje y última edición/borrado) para
+ * decidir en el cliente qué chats necesitan sincronizar el índice de búsqueda.
+ */
+export async function getSyncHeadsAction() {
+  const session = await requireSession();
+  return loadSyncHeads(session.userId);
+}
+
+export type SyncConversationResult = {
+  /** Mensajes nuevos desde `after` (inclusive). */
+  newer: ListMessagesResult;
+  /** Mensajes editados/eliminados desde `changedSince`; null si no se pidió. */
+  changed: ListMessagesResult | null;
+};
+
+/**
+ * Una sola petición para poner al día un chat ya indexado: lo nuevo y lo modificado.
+ * Fechas ISO tal como las devolvió el servidor (nunca relojes del cliente).
+ */
+export async function syncConversationAction(
+  conversationId: string,
+  after: string,
+  changedSince: string | null,
+): Promise<SyncConversationResult> {
+  const session = await requireSession();
+  await assertParticipant(conversationId, session.userId);
+
+  const afterDate = new Date(after);
+  const sinceDate = changedSince ? new Date(changedSince) : null;
+  if (Number.isNaN(afterDate.getTime()) || (sinceDate && Number.isNaN(sinceDate.getTime()))) {
+    throw new Error("Fecha inválida");
+  }
+
+  const [newer, changed] = await Promise.all([
+    listMessagesAfterUnchecked(conversationId, afterDate),
+    sinceDate ? listChangedMessagesUnchecked(conversationId, sinceDate) : Promise.resolve(null),
+  ]);
+  return { newer, changed };
 }
 
 /**

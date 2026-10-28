@@ -42,6 +42,8 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { useInboxHandler } from "@/hooks/use-inbox";
 import { CreateGroupDialog } from "@/components/chat/create-group-dialog";
 import { ChatSearchDialog } from "@/components/chat/chat-search-dialog";
+import { AppInfoDialog, type InfoTab } from "@/components/app/app-info-dialog";
+import { APP_VERSION } from "@/lib/version";
 
 type PendingRequestItem = {
   id: string;
@@ -180,6 +182,12 @@ export function ChatSidebar({
   const [isSearching, startSearchTransition] = useTransition();
   const [isGroupOpen, setIsGroupOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isInfoOpen, setIsInfoOpen] = useState(false);
+  const [infoTab, setInfoTab] = useState<InfoTab>("news");
+  const openInfo = (tab: InfoTab) => {
+    setInfoTab(tab);
+    setIsInfoOpen(true);
+  };
   const [, startTransition] = useTransition();
   const { onlineUserIds } = usePresence();
   const { setTotalUnread } = useUnreadTotal();
@@ -722,7 +730,33 @@ export function ChatSidebar({
           </ScrollArea>
         </TabsContent>
       </Tabs>
+
+      {/* Pie discreto: versión actual (abre novedades) y acceso a dispositivos. */}
+      <div className="flex items-center justify-between border-t px-4 py-1.5 text-[11px] text-muted-foreground">
+        <button
+          type="button"
+          onClick={() => openInfo("news")}
+          className="rounded px-1 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          aria-label={`Versión ${APP_VERSION}: ver novedades`}
+        >
+          v{APP_VERSION}
+        </button>
+        <button
+          type="button"
+          onClick={() => openInfo("devices")}
+          className="rounded px-1 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          Dispositivos
+        </button>
+      </div>
       </aside>
+
+      <AppInfoDialog
+        open={isInfoOpen}
+        onOpenChange={setIsInfoOpen}
+        tab={infoTab}
+        onTabChange={setInfoTab}
+      />
 
       <CreateGroupDialog
         open={isGroupOpen}

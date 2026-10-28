@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
+import { LOGIN_EXPIRED_ROUTE } from "@/lib/app-routes";
 import { HombrePostApp } from "@/components/hombrepost/hombrepost-app";
 
 export const metadata: Metadata = {
@@ -11,7 +12,7 @@ export const metadata: Metadata = {
 export default async function HombrePostPage() {
   const session = await getSession();
   if (!session) {
-    redirect("/login");
+    redirect(LOGIN_EXPIRED_ROUTE);
   }
 
   return <HombrePostApp />;
