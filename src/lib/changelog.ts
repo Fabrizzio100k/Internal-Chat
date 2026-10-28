@@ -19,6 +19,26 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.0.0",
+    date: "2026-10-28",
+    title: "Versión 1.0: funciona aunque tu red bloquee la conexión en vivo",
+    highlights: [
+      "Si tu VPN o la red de tu empresa bloquea la conexión en tiempo real, el chat sigue funcionando: tras unos 30 segundos de intentos se actualiza solo cada 5 segundos.",
+      "En ese modo también se ven los mensajes editados o borrados por la otra persona, los chats nuevos y las solicitudes.",
+      "En cuanto la conexión en vivo vuelve, todo regresa a ser instantáneo sin que tengas que hacer nada.",
+    ],
+  },
+  {
+    version: "0.6.0",
+    date: "2026-10-28",
+    title: "Avatares para todos",
+    highlights: [
+      "Cada persona tiene ahora su propio avatar (un animalito, un robot, un emoji…) que se ve en tus chats, grupos y contactos.",
+      "Si no eliges ninguno, se te asigna uno automáticamente y siempre es el mismo.",
+      "En Ajustes → Cuenta puedes cambiar tu avatar: elige un estilo, baraja hasta que te guste uno y guarda. También puedes volver al original.",
+    ],
+  },
+  {
     version: "0.5.0",
     date: "2026-10-28",
     title: "Cierre de sesión remoto al instante",

@@ -23,8 +23,8 @@ export type ConversationItem = {
   /** Chat contigo mismo ("Mensajes guardados"): un solo participante, tú. */
   isSelf: boolean;
   title: string;
-  otherUser: { id: string; username: string } | null;
-  members: { id: string; username: string }[];
+  otherUser: { id: string; username: string; avatar?: string | null } | null;
+  members: { id: string; username: string; avatar?: string | null }[];
   lastMessage: ConversationLastMessage | null;
   unreadCount: number;
   /** Fecha en que ESTE usuario fijó el chat; null si no está fijado. */
@@ -55,7 +55,10 @@ export async function loadConversationItems(
           isGroup: true,
           name: true,
           participants: {
-            select: { userId: true, user: { select: { id: true, username: true } } },
+            select: {
+              userId: true,
+              user: { select: { id: true, username: true, avatar: true } },
+            },
           },
           messages: {
             orderBy: { createdAt: "desc" },
@@ -142,14 +145,14 @@ export async function loadContacts(userId: string) {
         select: {
           participants: {
             where: { userId: { not: userId } },
-            select: { user: { select: { id: true, username: true } } },
+            select: { user: { select: { id: true, username: true, avatar: true } } },
           },
         },
       },
     },
   });
 
-  const byId = new Map<string, { id: string; username: string }>();
+  const byId = new Map<string, { id: string; username: string; avatar: string | null }>();
   for (const row of direct) {
     for (const p of row.conversation.participants) byId.set(p.user.id, p.user);
   }

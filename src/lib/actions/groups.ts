@@ -38,7 +38,7 @@ async function loadGroupFor(conversationId: string, userId: string) {
           userId: true,
           role: true,
           joinedAt: true,
-          user: { select: { id: true, username: true } },
+          user: { select: { id: true, username: true, avatar: true } },
         },
       },
     },
@@ -66,6 +66,7 @@ export async function getGroupInfoAction(conversationId: string): Promise<GroupI
     members: group.conversation.participants.map((p) => ({
       id: p.user.id,
       username: p.user.username,
+      avatar: p.user.avatar,
       role: p.role,
     })),
   };

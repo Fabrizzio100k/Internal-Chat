@@ -1,4 +1,9 @@
-export type GroupMember = { id: string; username: string; role: "ADMIN" | "MEMBER" };
+export type GroupMember = {
+  id: string;
+  username: string;
+  avatar?: string | null;
+  role: "ADMIN" | "MEMBER";
+};
 
 export type GroupInfo = {
   name: string;

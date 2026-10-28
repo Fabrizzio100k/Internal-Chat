@@ -7,6 +7,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { LayoutGrid, Search, UserPlus, Check, X, Users, UsersRound, Bookmark, Pin, PinOff, Settings } from "lucide-react";
 import { ContextMenu as ContextMenuPrimitive } from "@base-ui/react/context-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { UserAvatar } from "@/components/app/user-avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -42,6 +43,7 @@ import { CreateGroupDialog } from "@/components/chat/create-group-dialog";
 import { SidebarSearchPanel } from "@/components/chat/sidebar-search-panel";
 import { SettingsDialog, useSettingsState } from "@/components/app/settings-dialog";
 import { APP_VERSION } from "@/lib/version";
+import { keepIfEqual } from "@/lib/keep-if-equal";
 
 type PendingRequestItem = {
   id: string;
@@ -88,17 +90,22 @@ const ConversationRow = memo(function ConversationRow({
           )}
         >
           <div className="relative">
-            <Avatar>
-              <AvatarFallback>
-                {conversation.isGroup ? (
-                  <Users className="size-4" />
-                ) : conversation.isSelf ? (
-                  <Bookmark className="size-4" />
-                ) : (
-                  conversation.title.slice(0, 2).toUpperCase()
-                )}
-              </AvatarFallback>
-            </Avatar>
+            {conversation.isGroup || conversation.isSelf ? (
+              <Avatar>
+                <AvatarFallback>
+                  {conversation.isGroup ? (
+                    <Users className="size-4" />
+                  ) : (
+                    <Bookmark className="size-4" />
+                  )}
+                </AvatarFallback>
+              </Avatar>
+            ) : (
+              <UserAvatar
+                username={conversation.title}
+                avatar={conversation.otherUser?.avatar}
+              />
+            )}
             {!conversation.isGroup && !conversation.isSelf && (
               <PresenceDot online={isOnline} className="absolute -right-0.5 -bottom-0.5" />
             )}
@@ -163,10 +170,12 @@ const ConversationRow = memo(function ConversationRow({
 
 export function ChatSidebar({
   currentUser,
+  currentUserAvatar,
   initialConversations,
   initialPendingRequests,
 }: {
   currentUser: SessionUser;
+  currentUserAvatar: string | null;
   initialConversations: ConversationItem[];
   initialPendingRequests: PendingRequestItem[];
 }) {
@@ -318,12 +327,13 @@ export function ChatSidebar({
           .catch(() => {});
         return;
       case "resync":
-        // Reconexión: pudimos perder eventos; recarga ambas listas.
+        // Reconexión o sondeo de respaldo: pudimos perder eventos; recarga ambas listas.
+        // keepIfEqual evita repintar cuando el sondeo (cada 5 s) no trae cambios.
         listConversationsAction()
-          .then(setConversations)
+          .then((next) => setConversations((prev) => keepIfEqual(prev, next)))
           .catch(() => {});
         listPendingRequestsAction()
-          .then(setPendingRequests)
+          .then((next) => setPendingRequests((prev) => keepIfEqual(prev, next)))
           .catch(() => {});
         return;
       default:
@@ -776,6 +786,7 @@ export function ChatSidebar({
         section={settings.section}
         onSectionChange={settings.setSection}
         username={currentUser.username}
+        avatar={currentUserAvatar}
       />
 
       <CreateGroupDialog

@@ -19,15 +19,15 @@ export default async function AppsPage() {
     redirect(LOGIN_EXPIRED_ROUTE);
   }
 
-  const versionRow = await prisma.user.findUnique({
+  const userRow = await prisma.user.findUnique({
     where: { id: session.userId },
-    select: { lastSeenVersion: true },
+    select: { lastSeenVersion: true, avatar: true },
   });
 
   return (
     <div className="sky-backdrop flex min-h-screen flex-col bg-background">
       <SessionGuard />
-      <WhatsNewDialog userId={session.userId} lastSeenVersion={versionRow?.lastSeenVersion ?? null} />
+      <WhatsNewDialog userId={session.userId} lastSeenVersion={userRow?.lastSeenVersion ?? null} />
       <header className="glass flex items-center justify-between gap-4 border-b px-4 py-3 sm:px-6">
         <div className="min-w-0">
           <h1 className="font-heading text-base leading-tight font-medium">Apps internas</h1>
@@ -35,7 +35,7 @@ export default async function AppsPage() {
             Hola, {session.username}. Elige una app para empezar.
           </p>
         </div>
-        <SessionMenu username={session.username} />
+        <SessionMenu username={session.username} avatar={userRow?.avatar ?? null} />
       </header>
 
       <main className="mx-auto w-full max-w-4xl flex-1 px-4 py-8 sm:px-6">

@@ -14,7 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { UserAvatar } from "@/components/app/user-avatar";
 import { PresenceDot } from "@/components/chat/presence-dot";
 import { usePresence } from "@/hooks/use-presence";
 import {
@@ -157,9 +157,7 @@ function GroupInfoDialogInner({
             return (
               <div key={member.id} className="flex items-center gap-2.5 p-2">
                 <div className="relative">
-                  <Avatar size="sm">
-                    <AvatarFallback>{member.username.slice(0, 2).toUpperCase()}</AvatarFallback>
-                  </Avatar>
+                  <UserAvatar username={member.username} avatar={member.avatar} size="sm" />
                   <PresenceDot
                     online={onlineUserIds.has(member.id)}
                     className="absolute -right-0.5 -bottom-0.5 size-2"

@@ -4,9 +4,10 @@ import { useState, useSyncExternalStore, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import { Laptop, LogOut, Moon, Palette, ShieldCheck, Sparkles, Sun, User } from "lucide-react";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { AvatarPicker } from "@/components/app/avatar-picker";
+import { UserAvatar } from "@/components/app/user-avatar";
 import { ChangelogList } from "@/components/app/changelog-list";
 import { DeleteAccountPanel } from "@/components/app/delete-account-panel";
 import { DevicesPanel } from "@/components/app/devices-panel";
@@ -35,12 +36,15 @@ export function SettingsDialog({
   section,
   onSectionChange,
   username,
+  avatar = null,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   section: SettingsSection;
   onSectionChange: (section: SettingsSection) => void;
   username: string;
+  /** Avatar guardado del usuario ("estilo:semilla"); null = el derivado del username. */
+  avatar?: string | null;
 }) {
   const current = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0];
   return (
@@ -102,7 +106,7 @@ export function SettingsDialog({
           </header>
 
           {/* Cada sección se monta solo si está activa y el diálogo abierto: carga fresca. */}
-          {open && section === "account" && <AccountSection username={username} />}
+          {open && section === "account" && <AccountSection username={username} initialAvatar={avatar} />}
           {open && section === "appearance" && <AppearanceSection />}
           {open && section === "devices" && <DevicesPanel />}
           {open && section === "news" && <ChangelogList entries={CHANGELOG} />}
@@ -112,16 +116,21 @@ export function SettingsDialog({
   );
 }
 
-function AccountSection({ username }: { username: string }) {
+function AccountSection({
+  username,
+  initialAvatar,
+}: {
+  username: string;
+  initialAvatar: string | null;
+}) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
+  const [avatar, setAvatar] = useState(initialAvatar);
 
   return (
     <div className="flex flex-col gap-5">
       <div className="flex items-center gap-3 rounded-2xl border p-4">
-        <Avatar size="lg" className="size-12">
-          <AvatarFallback className="text-base">{username.slice(0, 2).toUpperCase()}</AvatarFallback>
-        </Avatar>
+        <UserAvatar username={username} avatar={avatar} size="lg" className="size-12" />
         <div className="flex min-w-0 flex-1 flex-col">
           <span className="truncate text-base font-semibold">{username}</span>
           <span className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -144,6 +153,8 @@ function AccountSection({ username }: { username: string }) {
           <LogOut /> Cerrar sesión
         </Button>
       </div>
+
+      <AvatarPicker username={username} avatar={avatar} onSaved={setAvatar} />
 
       <DeleteAccountPanel />
     </div>

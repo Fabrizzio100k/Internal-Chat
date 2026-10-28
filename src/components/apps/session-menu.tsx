@@ -1,12 +1,12 @@
 "use client";
 
 import { Settings } from "lucide-react";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { SettingsDialog, useSettingsState } from "@/components/app/settings-dialog";
+import { UserAvatar } from "@/components/app/user-avatar";
 
 /** Perfil y ajustes (cuenta, apariencia, dispositivos, novedades) del launcher. */
-export function SessionMenu({ username }: { username: string }) {
+export function SessionMenu({ username, avatar }: { username: string; avatar: string | null }) {
   const settings = useSettingsState("account");
 
   return (
@@ -17,9 +17,7 @@ export function SessionMenu({ username }: { username: string }) {
         className="flex items-center gap-2 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
         aria-label="Abrir ajustes de la cuenta"
       >
-        <Avatar className="size-8">
-          <AvatarFallback>{username.slice(0, 2).toUpperCase()}</AvatarFallback>
-        </Avatar>
+        <UserAvatar username={username} avatar={avatar} className="size-8" />
         <span className="mr-1 hidden text-sm font-medium sm:inline">{username}</span>
       </button>
       <Button
@@ -38,6 +36,7 @@ export function SessionMenu({ username }: { username: string }) {
         section={settings.section}
         onSectionChange={settings.setSection}
         username={username}
+        avatar={avatar}
       />
     </div>
   );

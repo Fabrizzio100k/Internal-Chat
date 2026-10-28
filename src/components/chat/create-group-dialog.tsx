@@ -13,12 +13,12 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { UserAvatar } from "@/components/app/user-avatar";
 import { createGroupAction, listContactsAction } from "@/lib/actions/chat";
 import { getSendingKey } from "@/lib/e2ee/conversation-keys";
 import { describeE2eeError } from "@/lib/e2ee/messages";
 
-type Member = { id: string; username: string };
+type Member = { id: string; username: string; avatar?: string | null };
 
 type CreatedConversation = {
   id: string;
@@ -167,9 +167,7 @@ function CreateGroupDialogInner({ open, onOpenChange, currentUser, onCreated }: 
                   onChange={() => toggle(contact.id)}
                   className="size-4 accent-primary"
                 />
-                <Avatar size="sm">
-                  <AvatarFallback>{contact.username.slice(0, 2).toUpperCase()}</AvatarFallback>
-                </Avatar>
+                <UserAvatar username={contact.username} avatar={contact.avatar} size="sm" />
                 <span className="text-sm">{contact.username}</span>
               </label>
             ))

@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { INBOX_EVENT_NAME, type InboxEvent } from "@/lib/types/realtime";
+import { createRealtimeFallback } from "@/lib/realtime-fallback";
 
 type Handler = (event: InboxEvent) => void;
 
@@ -41,6 +42,18 @@ export function InboxProvider({
   useEffect(() => {
     const supabase = createSupabaseBrowserClient();
     let hasConnectedBefore = false;
+    let closing = false;
+
+    // Respaldo: si el WebSocket no conecta en 30 s (VPN/proxy), pide lo último cada 5 s con el
+    // mismo evento "resync" que ya usan la lista, el chat abierto y el guardián de sesión.
+    const fallback = createRealtimeFallback({
+      onPoll: () => dispatch({ type: "resync" }),
+      isVisible: () => document.visibilityState === "visible",
+    });
+    const onVisible = () => fallback.pollNow();
+    document.addEventListener("visibilitychange", onVisible);
+    // Arranca "desconectado": si nunca llega a conectar, el respaldo entra a los 30 s.
+    fallback.setConnected(false);
 
     const channel = supabase
       .channel(topic, { config: { broadcast: { self: false } } })
@@ -48,13 +61,24 @@ export function InboxProvider({
         dispatch(payload as InboxEvent);
       })
       .subscribe((status) => {
-        if (status !== "SUBSCRIBED") return;
-        // Tras una reconexión pudimos perder eventos: pedir re-sincronizar.
-        if (hasConnectedBefore) dispatch({ type: "resync" });
-        hasConnectedBefore = true;
+        // El CLOSED que provoca nuestro propio removeChannel() no es un corte de red.
+        if (closing) return;
+        if (status === "SUBSCRIBED") {
+          const wasPolling = fallback.isPolling();
+          fallback.setConnected(true);
+          // Tras una reconexión (o tras haber sondeado) pudimos perder eventos: re-sincronizar.
+          if (hasConnectedBefore || wasPolling) dispatch({ type: "resync" });
+          hasConnectedBefore = true;
+        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          // La librería reintenta sola; mientras tanto corre la cuenta atrás del respaldo.
+          fallback.setConnected(false);
+        }
       });
 
     return () => {
+      closing = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      fallback.dispose();
       supabase.removeChannel(channel);
     };
   }, [topic, dispatch]);

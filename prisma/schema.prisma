@@ -25,6 +25,9 @@ model User {
   passwordHash String
   createdAt    DateTime @default(now())
 
+  // Avatar elegido: "<estilo>:<semilla>" (p. ej. "animals:k3x9a"). null = el que se deriva del username.
+  avatar String?
+
   sentRequests     ChatRequest[] @relation("SentRequests")
   receivedRequests ChatRequest[] @relation("ReceivedRequests")
 

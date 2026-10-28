@@ -15,6 +15,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Bookmark, ChevronDown, Loader2, Lock, Menu, Search, ShieldAlert, UploadCloud, Users } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { UserAvatar } from "@/components/app/user-avatar";
 import { Button } from "@/components/ui/button";
 import {
   listMessagesAction,
@@ -49,7 +50,7 @@ import { editTextMessage, sendTextMessage } from "@/lib/e2ee/outgoing";
 import { removeFromIndex, indexMessages } from "@/lib/e2ee/search-index";
 
 type SessionUser = { userId: string; username: string };
-type Member = { id: string; username: string };
+type Member = { id: string; username: string; avatar?: string | null };
 
 /** Aviso de seguridad mostrado bajo el encabezado de la conversación. */
 type SecurityNotice =
@@ -368,16 +369,34 @@ export function ChatWindow({
         return;
       }
       case "resync": {
-        // Reconexión: trae lo último y añade lo que no tengamos.
+        // Reconexión o sondeo de respaldo: trae lo último, añade lo que no tengamos y aplica
+        // las ediciones/borrados que pudimos perdernos.
         listMessagesAction(conversationId)
           .then(async (result) => {
+            const local = new Map(messagesRef.current.map((m) => [m.id, m]));
             const fresh = result.messages.filter((m) => !seenMessageIds.current.has(m.id));
-            if (fresh.length === 0) return;
+            const changed = result.messages.filter((wire) => {
+              const current = local.get(wire.id);
+              if (!current) return false;
+              if (wire.deletedAt && !current.deletedAt) return true;
+              return (
+                !!wire.editedAt &&
+                new Date(wire.editedAt).getTime() !== new Date(current.editedAt ?? 0).getTime()
+              );
+            });
+            if (fresh.length === 0 && changed.length === 0) return;
             fresh.forEach((m) => seenMessageIds.current.add(m.id));
-            const decrypted = await decryptWireMessages(fresh);
+            const [decryptedFresh, decryptedChanged] = await Promise.all([
+              decryptWireMessages(fresh),
+              decryptWireMessages(changed),
+            ]);
+            const updates = new Map(decryptedChanged.map((m) => [m.id, m]));
             setMessages((prev) => {
               const known = new Set(prev.map((m) => m.id));
-              const merged = [...prev, ...decrypted.filter((m) => !known.has(m.id))];
+              const merged = [
+                ...prev.map((m) => updates.get(m.id) ?? m),
+                ...decryptedFresh.filter((m) => !known.has(m.id)),
+              ];
               return merged.sort(
                 (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
               );
@@ -659,9 +678,7 @@ export function ChatWindow({
         ) : (
           <>
             <div className="relative">
-              <Avatar>
-                <AvatarFallback>{title.slice(0, 2).toUpperCase()}</AvatarFallback>
-              </Avatar>
+              <UserAvatar username={title} avatar={otherUser?.avatar} />
               {isRealtimeConnected && (
                 <PresenceDot online={isOtherUserOnline} className="absolute -right-0.5 -bottom-0.5" />
               )}

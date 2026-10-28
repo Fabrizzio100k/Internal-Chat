@@ -24,7 +24,11 @@ export default async function ConversationPage({
       isGroup: true,
       name: true,
       participants: {
-        select: { userId: true, role: true, user: { select: { id: true, username: true } } },
+        select: {
+          userId: true,
+          role: true,
+          user: { select: { id: true, username: true, avatar: true } },
+        },
       },
     },
   });

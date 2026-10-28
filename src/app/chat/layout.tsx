@@ -26,7 +26,7 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
     listPendingRequestsAction(),
     prisma.user.findUnique({
       where: { id: session.userId },
-      select: { lastSeenVersion: true },
+      select: { lastSeenVersion: true, avatar: true },
     }),
   ]);
 
@@ -47,6 +47,7 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
               <div className="flex h-dvh overflow-hidden bg-background">
                 <ChatSidebar
                   currentUser={session}
+                  currentUserAvatar={versionRow?.avatar ?? null}
                   initialConversations={conversations}
                   initialPendingRequests={pendingRequests}
                 />
