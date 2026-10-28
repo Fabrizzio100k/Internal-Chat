@@ -9,14 +9,18 @@ import {
   useState,
 } from "react";
 import { useDropzone } from "react-dropzone";
-import { useRouter } from "next/navigation";
-import { ChatSearchDialog } from "@/components/chat/chat-search-dialog";
+import { ChatSearchBar, type SearchView } from "@/components/chat/chat-search-bar";
+import { useSearchHighlights } from "@/hooks/use-search-highlights";
 import { AnimatePresence, motion } from "framer-motion";
 import { Bookmark, Loader2, Lock, Menu, Search, ShieldAlert, UploadCloud, Users } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { listMessagesAction, deleteMessageAction } from "@/lib/actions/messages";
+import {
+  listMessagesAction,
+  listMessagesAroundAction,
+  deleteMessageAction,
+} from "@/lib/actions/messages";
 import { markConversationReadAction } from "@/lib/actions/chat";
 import { PresenceDot } from "@/components/chat/presence-dot";
 import { TypingIndicator } from "@/components/chat/typing-indicator";
@@ -98,9 +102,9 @@ export function ChatWindow({
   });
   const [isGroupInfoOpen, setIsGroupInfoOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchView, setSearchView] = useState<SearchView | null>(null);
   const [isEncryptionOpen, setIsEncryptionOpen] = useState(false);
   const [notice, setNotice] = useState<SecurityNotice | null>(null);
-  const router = useRouter();
   const members = group.members;
   const displayTitle = isGroup ? group.name : title;
 
@@ -468,25 +472,72 @@ export function ChatWindow({
 
   const handleStartEdit = useCallback((messageId: string) => setEditingMessageId(messageId), []);
   // Resultado de la búsqueda dentro del chat: si el mensaje ya está cargado se
-  // salta a él al instante; si es antiguo, se recarga la conversación centrada en él.
-  const handleSearchSelect = useCallback(
-    (targetConversationId: string, messageId: string) => {
-      setIsSearchOpen(false);
+  // salta a él al instante; si es antiguo, se carga una ventana de historial centrada en él
+  // (sin recargar la conversación, así la barra de búsqueda y su estado se conservan).
+  const pendingScrollRef = useRef<string | null>(null);
+  const searchJumpRef = useRef(0);
+  const goToMessage = useCallback(
+    async (messageId: string) => {
       const el = document.getElementById(`msg-${messageId}`);
       if (el) {
         shouldStickToBottom.current = false;
-        el.scrollIntoView({ block: "center" });
-        el.classList.remove("message-flash");
-        // Reinicia la animación de resaltado aunque ya se hubiera aplicado antes.
-        void el.offsetWidth;
-        el.classList.add("message-flash");
-        window.setTimeout(() => el.classList.remove("message-flash"), 1900);
+        el.scrollIntoView({ block: "center", behavior: "smooth" });
         return;
       }
-      router.push(`/chat/${targetConversationId}?m=${encodeURIComponent(messageId)}`);
+      const jump = ++searchJumpRef.current;
+      try {
+        const result = await listMessagesAroundAction(conversationId, messageId);
+        if (jump !== searchJumpRef.current) return; // el usuario ya pidió otra coincidencia
+        if (!result) {
+          toast.error("Ese mensaje es demasiado antiguo para mostrarlo aquí. Usa la búsqueda general.");
+          return;
+        }
+        const around = await decryptWireMessages(result.messages);
+        if (jump !== searchJumpRef.current) return;
+        around.forEach((m) => seenMessageIds.current.add(m.id));
+        shouldStickToBottom.current = false;
+        pendingScrollRef.current = messageId;
+        const ids = new Set(around.map((m) => m.id));
+        setMessages((prev) => [...around, ...prev.filter((m) => m.pending && !ids.has(m.id))]);
+        setHasMore(result.hasMore);
+        indexMessages(currentUser.userId, around).catch(() => {});
+      } catch {
+        toast.error("No se pudo cargar ese mensaje");
+      }
     },
-    [router],
+    [conversationId, currentUser.userId],
   );
+
+  // Tras cargar una ventana de historial, centra la coincidencia antes de pintar.
+  useLayoutEffect(() => {
+    const target = pendingScrollRef.current;
+    if (!target) return;
+    const el = document.getElementById(`msg-${target}`);
+    if (!el) return;
+    pendingScrollRef.current = null;
+    el.scrollIntoView({ block: "center" });
+  }, [messages]);
+
+  const openSearch = useCallback(() => setIsSearchOpen(true), []);
+  const closeSearch = useCallback(() => {
+    setIsSearchOpen(false);
+    setSearchView(null);
+  }, []);
+
+  // Ctrl/Cmd+F abre la búsqueda del chat en vez de la del navegador.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        setIsSearchOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  const searchIds = useMemo(() => new Set(searchView?.ids), [searchView?.ids]);
+  useSearchHighlights(searchView, messages.length);
 
   const handleCancelEdit = useCallback(() => setEditingMessageId(null), []);
 
@@ -541,7 +592,7 @@ export function ChatWindow({
     <div {...getRootProps()} className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden">
       <input {...getInputProps()} />
 
-      <header className="flex shrink-0 items-center gap-3 border-b px-4 py-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
+      <header className="glass flex shrink-0 items-center gap-3 border-b px-4 py-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
         <Button
           type="button"
           variant="ghost"
@@ -617,12 +668,26 @@ export function ChatWindow({
           variant="ghost"
           size="icon-sm"
           className="shrink-0"
-          onClick={() => setIsSearchOpen(true)}
+          onClick={openSearch}
           aria-label="Buscar en este chat"
+          aria-expanded={isSearchOpen}
         >
           <Search />
         </Button>
       </header>
+
+      <AnimatePresence initial={false}>
+        {isSearchOpen && (
+          <ChatSearchBar
+            key="chat-search"
+            ownerId={currentUser.userId}
+            conversationId={conversationId}
+            onClose={closeSearch}
+            onView={setSearchView}
+            onNavigate={goToMessage}
+          />
+        )}
+      </AnimatePresence>
 
       {notice && (
         <div
@@ -658,13 +723,6 @@ export function ChatWindow({
           invalidateConversation(conversationId);
           void checkSecurity();
         }}
-      />
-
-      <ChatSearchDialog
-        open={isSearchOpen}
-        onOpenChange={setIsSearchOpen}
-        scopedConversationId={conversationId}
-        onSelect={handleSearchSelect}
       />
 
       {isGroup && (
@@ -716,6 +774,13 @@ export function ChatWindow({
                 senderLabel={senderLabel}
                 isEditing={editingMessageId === message.id}
                 isHighlighted={message.id === highlightMessageId}
+                matchState={
+                  searchView?.activeId === message.id
+                    ? "current"
+                    : searchIds.has(message.id)
+                      ? "match"
+                      : null
+                }
                 onCopy={handleCopyMessage}
                 onStartEdit={handleStartEdit}
                 onCancelEdit={handleCancelEdit}

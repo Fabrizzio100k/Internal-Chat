@@ -41,7 +41,7 @@ import { TypingIndicator } from "@/components/chat/typing-indicator";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useInboxHandler } from "@/hooks/use-inbox";
 import { CreateGroupDialog } from "@/components/chat/create-group-dialog";
-import { ChatSearchDialog } from "@/components/chat/chat-search-dialog";
+import { SidebarSearchPanel } from "@/components/chat/sidebar-search-panel";
 import { AppInfoDialog, type InfoTab } from "@/components/app/app-info-dialog";
 import { APP_VERSION } from "@/lib/version";
 
@@ -85,8 +85,8 @@ const ConversationRow = memo(function ConversationRow({
           type="button"
           onClick={() => onOpen(conversation.id)}
           className={cn(
-            "flex w-full items-center gap-2.5 rounded-lg p-2 text-left transition-colors hover:bg-muted",
-            isActive && "bg-muted",
+            "flex w-full items-center gap-2.5 rounded-xl p-2 text-left transition-colors hover:bg-accent/60",
+            isActive && "bg-primary/10 hover:bg-primary/15",
           )}
         >
           <div className="relative">
@@ -148,7 +148,7 @@ const ConversationRow = memo(function ConversationRow({
       </ContextMenuPrimitive.Trigger>
       <ContextMenuPrimitive.Portal>
         <ContextMenuPrimitive.Positioner className="isolate z-50 outline-none">
-          <ContextMenuPrimitive.Popup className="min-w-36 origin-(--transform-origin) overflow-hidden rounded-lg border bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95">
+          <ContextMenuPrimitive.Popup className="min-w-36 origin-(--transform-origin) overflow-hidden rounded-xl border bg-popover/95 p-1 backdrop-blur-xl text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95">
             <ContextMenuPrimitive.Item
               className="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-hidden select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground"
               onClick={() => onTogglePin(conversation.id, !isPinned)}
@@ -495,8 +495,8 @@ export function ChatSidebar({
 
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-50 flex h-full w-72 flex-col border-r bg-background pb-[env(safe-area-inset-bottom)] transition-transform duration-200 ease-out will-change-transform",
-          "md:relative md:z-auto md:w-80 md:translate-x-0 md:bg-muted/30",
+          "fixed inset-y-0 left-0 z-50 flex h-full w-72 flex-col border-r bg-sidebar pb-[env(safe-area-inset-bottom)] transition-transform duration-200 ease-out will-change-transform",
+          "md:relative md:z-auto md:w-80 md:translate-x-0 md:bg-sidebar/85 md:backdrop-blur-xl",
           isOpen ? "translate-x-0" : "-translate-x-full",
         )}
       >
@@ -559,6 +559,30 @@ export function ChatSidebar({
       </div>
 
       <Separator />
+
+      <AnimatePresence mode="wait" initial={false}>
+      {isSearchOpen ? (
+        <SidebarSearchPanel
+          key="search"
+          ownerId={currentUser.userId}
+          chats={conversations.map((c) => ({ id: c.id, title: c.title, isGroup: c.isGroup }))}
+          activeConversationId={activeConversationId}
+          onClose={() => setIsSearchOpen(false)}
+          onSelect={(conversationId, messageId) => {
+            setIsSearchOpen(false);
+            router.push(`/chat/${conversationId}?m=${encodeURIComponent(messageId)}`);
+            close();
+          }}
+        />
+      ) : (
+      <motion.div
+        key="lists"
+        initial={{ opacity: 0, y: -6 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: -6 }}
+        transition={{ duration: 0.16 }}
+        className="flex min-h-0 flex-1 flex-col"
+      >
 
       <div className="p-3">
         <div className="relative">
@@ -730,6 +754,9 @@ export function ChatSidebar({
           </ScrollArea>
         </TabsContent>
       </Tabs>
+      </motion.div>
+      )}
+      </AnimatePresence>
 
       {/* Pie discreto: versión actual (abre novedades) y acceso a dispositivos. */}
       <div className="flex items-center justify-between border-t px-4 py-1.5 text-[11px] text-muted-foreground">
@@ -765,16 +792,6 @@ export function ChatSidebar({
         onCreated={(conversation) => {
           setConversations((prev) => sortConversations([conversation, ...prev]));
           openConversation(conversation.id);
-        }}
-      />
-      <ChatSearchDialog
-        open={isSearchOpen}
-        onOpenChange={setIsSearchOpen}
-        activeConversationId={activeConversationId}
-        onSelect={(conversationId, messageId) => {
-          setIsSearchOpen(false);
-          router.push(`/chat/${conversationId}?m=${encodeURIComponent(messageId)}`);
-          close();
         }}
       />
     </>

@@ -15,7 +15,7 @@ import {
 } from "@/lib/e2ee/key-store";
 import { decryptPayload, decryptWireMessages } from "@/lib/e2ee/messages";
 import type { MessageData } from "@/lib/e2ee/message-types";
-import { normalize, TrigramIndex } from "@/lib/e2ee/search-engine";
+import { FLAG, normalize, TrigramIndex } from "@/lib/e2ee/search-engine";
 import { onIdentityReset } from "@/lib/e2ee/session";
 import type { WireMessage } from "@/lib/types/messages";
 import type { InboxEvent } from "@/lib/types/realtime";
@@ -34,13 +34,31 @@ export { normalize };
  *    todos los chats) y solo se descarga lo que cambió desde la última vez. Ver runSearchIndexer.
  */
 
-const RESULTS_LIMIT = 30;
+const RESULTS_LIMIT = 50;
 const META_VERSION = 2;
 const EPOCH_ISO = "1970-01-01T00:00:00.000Z";
 const BUILD_BATCH = 4000;
 /** Separación mínima entre peticiones del indexador: el proxy limita las peticiones por IP. */
 const REQUEST_GAP_MS = 400;
 const INDEX_CONCURRENCY = 2;
+
+/** Filtros por tipo de contenido (chips de la búsqueda). */
+export type SearchFilter = "all" | "links" | "images" | "videos" | "files";
+
+// Detecta enlaces en el texto de un mensaje (sin estado: seguro para `test` repetido).
+const URL_PATTERN = /\bhttps?:\/\/\S+|\bwww\.\S+/i;
+
+function fileFlag(mimeType: string): number {
+  if (mimeType.startsWith("image/")) return FLAG.IMAGE;
+  if (mimeType.startsWith("video/")) return FLAG.VIDEO;
+  return FLAG.FILE;
+}
+
+const FILE_FILTER_FLAG: Record<Exclude<SearchFilter, "all" | "links">, number> = {
+  images: FLAG.IMAGE,
+  videos: FLAG.VIDEO,
+  files: FLAG.FILE,
+};
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -104,6 +122,7 @@ function addToEngines(engines: Engines, doc: SearchDoc): void {
       conversationId: doc.conversationId,
       createdAt,
       norm: doc.norm,
+      flags: URL_PATTERN.test(doc.text) ? FLAG.LINK : 0,
     });
   }
   if (doc.files.length > 0) {
@@ -114,6 +133,7 @@ function addToEngines(engines: Engines, doc: SearchDoc): void {
         conversationId: doc.conversationId,
         createdAt,
         norm: file.norm,
+        flags: fileFlag(file.type),
       }),
     );
     engines.fileKeys.set(doc.id, keys);
@@ -219,24 +239,86 @@ export type SearchFileHit = {
 export type LocalSearchResults = { messages: SearchMessageHit[]; files: SearchFileHit[] };
 
 /** Busca en el índice local. `conversationId` limita la búsqueda a un chat. */
+/**
+ * Consulta efectiva para un filtro: con "Todo" hacen falta ≥2 letras; con un filtro de tipo
+ * el texto es opcional (sin texto se listan todos los de ese tipo).
+ */
+function effectiveQuery(query: string, filter: SearchFilter): string | null {
+  const q = normalize(query.trim());
+  if (filter === "all") return q.length >= 2 ? q : null;
+  return q.length >= 2 ? q : "";
+}
+
+/** Entradas de índice que cumplen filtro + texto, en el ámbito dado (más recientes primero). */
+function runFilter(
+  engines: Engines,
+  q: string,
+  filter: SearchFilter,
+  conversationId: string | undefined,
+  limit: number,
+) {
+  const base = { conversationId, limit };
+  if (filter === "all") {
+    return { messages: engines.messages.search(q, base), files: engines.files.search(q, base) };
+  }
+  if (filter === "links") {
+    return { messages: engines.messages.search(q, { ...base, flags: FLAG.LINK }), files: [] };
+  }
+  return { messages: [], files: engines.files.search(q, { ...base, flags: FILE_FILTER_FLAG[filter] }) };
+}
+
+const fileRef = (key: string) => {
+  const at = key.indexOf("#");
+  return { messageId: key.slice(0, at), fileId: key.slice(at + 1) };
+};
+
+/** Máximo de coincidencias navegables dentro de un chat. */
+const MATCH_LIMIT = 1000;
+
+/**
+ * Mensajes de UN chat que coinciden con la búsqueda, del más reciente al más antiguo
+ * (para el contador y las flechas ▲▼). Solo ids: no toca IndexedDB.
+ */
+export async function findMatchingMessages(
+  ownerId: string,
+  conversationId: string,
+  query: string,
+  filter: SearchFilter,
+): Promise<{ ids: string[]; truncated: boolean }> {
+  const q = effectiveQuery(query, filter);
+  if (q === null) return { ids: [], truncated: false };
+
+  const engines = await getEngines(ownerId);
+  const { messages, files } = runFilter(engines, q, filter, conversationId, MATCH_LIMIT + 1);
+
+  // Un mensaje puede coincidir por su texto y por sus archivos: se cuenta una vez.
+  const newest = new Map<string, number>();
+  for (const entry of messages) newest.set(entry.key, entry.createdAt);
+  for (const entry of files) newest.set(fileRef(entry.key).messageId, entry.createdAt);
+  const ordered = [...newest.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
+  return { ids: ordered.slice(0, MATCH_LIMIT), truncated: ordered.length > MATCH_LIMIT };
+}
+
+/** Busca en el índice local. `conversationId` limita la búsqueda a un chat. */
 export async function searchLocal(
   ownerId: string,
   query: string,
   conversationId?: string,
+  filter: SearchFilter = "all",
 ): Promise<LocalSearchResults> {
-  const q = normalize(query.trim());
-  if (q.length < 2) return { messages: [], files: [] };
+  const q = effectiveQuery(query, filter);
+  if (q === null) return { messages: [], files: [] };
 
   const engines = await getEngines(ownerId);
-  const options = { conversationId, limit: RESULTS_LIMIT };
-  const messageEntries = engines.messages.search(q, options);
-  const fileEntries = engines.files.search(q, options);
+  const { messages: messageEntries, files: fileEntries } = runFilter(
+    engines,
+    q,
+    filter,
+    conversationId,
+    RESULTS_LIMIT,
+  );
 
-  // Solo los pocos aciertos (máx. 30 + 30) se leen de IndexedDB, en una transacción.
-  const fileRef = (key: string) => {
-    const at = key.indexOf("#");
-    return { messageId: key.slice(0, at), fileId: key.slice(at + 1) };
-  };
+  // Solo los pocos aciertos (máx. RESULTS_LIMIT de cada tipo) se leen de IndexedDB, en una transacción.
   const ids = [...new Set([...messageEntries.map((e) => e.key), ...fileEntries.map((e) => fileRef(e.key).messageId)])];
   const docs = new Map((await getSearchDocs(ownerId, ids)).map((doc) => [doc.id, doc]));
 

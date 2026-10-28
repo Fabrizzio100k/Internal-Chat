@@ -25,10 +25,10 @@ export default async function AppsPage() {
   });
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
+    <div className="sky-backdrop flex min-h-screen flex-col bg-background">
       <SessionGuard />
       <WhatsNewDialog userId={session.userId} lastSeenVersion={versionRow?.lastSeenVersion ?? null} />
-      <header className="flex items-center justify-between gap-4 border-b px-4 py-3 sm:px-6">
+      <header className="glass flex items-center justify-between gap-4 border-b px-4 py-3 sm:px-6">
         <div className="min-w-0">
           <h1 className="font-heading text-base leading-tight font-medium">Apps internas</h1>
           <p className="truncate text-xs text-muted-foreground">

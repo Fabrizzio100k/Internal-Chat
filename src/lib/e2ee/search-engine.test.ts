@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { TrigramIndex, normalize, type EngineEntry } from "@/lib/e2ee/search-engine";
+import { FLAG, TrigramIndex, normalize, type EngineEntry } from "@/lib/e2ee/search-engine";
 
 const WORDS = [
   "camión", "camiones", "reunión", "mañana", "factura", "pago", "servidor", "deploy", "error",
@@ -112,4 +112,39 @@ test("respeta el límite y ordena por fecha descendente", () => {
 
 test("normalize quita acentos y mayúsculas", () => {
   assert.equal(normalize("CAMIÓN Ñandú"), "camion nandu");
+});
+
+test("filtros por tipo: con y sin texto, y modo navegar", () => {
+  const index = new TrigramIndex();
+  index.upsert({ key: "a", conversationId: "c1", createdAt: 1, norm: "foto.png", flags: FLAG.IMAGE });
+  index.upsert({ key: "b", conversationId: "c1", createdAt: 2, norm: "clip.mp4", flags: FLAG.VIDEO });
+  index.upsert({ key: "c", conversationId: "c2", createdAt: 3, norm: "foto2.jpg", flags: FLAG.IMAGE });
+  index.upsert({ key: "d", conversationId: "c1", createdAt: 4, norm: "informe.pdf", flags: FLAG.FILE });
+  index.upsert({ key: "e", conversationId: "c1", createdAt: 5, norm: "mira https://x.dev ya", flags: FLAG.LINK });
+
+  // Navegar: todo lo de un tipo, más reciente primero, limitado por chat.
+  assert.deepEqual(index.search("", { limit: 10, flags: FLAG.IMAGE }).map((e) => e.key), ["c", "a"]);
+  assert.deepEqual(index.search("", { limit: 10, flags: FLAG.IMAGE, conversationId: "c1" }).map((e) => e.key), ["a"]);
+  // Texto + tipo.
+  assert.deepEqual(index.search("foto", { limit: 10, flags: FLAG.IMAGE }).map((e) => e.key), ["c", "a"]);
+  assert.deepEqual(index.search("foto", { limit: 10, flags: FLAG.VIDEO }), []);
+  // Varias etiquetas a la vez.
+  assert.deepEqual(index.search("", { limit: 10, flags: FLAG.IMAGE | FLAG.VIDEO }).map((e) => e.key), ["c", "b", "a"]);
+  assert.deepEqual(index.search("", { limit: 10, flags: FLAG.LINK }).map((e) => e.key), ["e"]);
+  // Sin texto ni etiquetas no se devuelve todo el corpus; una sola letra tampoco.
+  assert.deepEqual(index.search("", { limit: 10 }), []);
+  assert.deepEqual(index.search("f", { limit: 10 }), []);
+});
+
+test("límites grandes (navegación) dan el mismo resultado que la fuerza bruta", () => {
+  const entries = corpus(4000, 21);
+  const index = new TrigramIndex();
+  entries.forEach((e) => index.upsert(e));
+  for (const q of ["cam", "camion", "ñand", "ca", "aaaa"]) {
+    assert.deepEqual(
+      index.search(q, { limit: 1000 }).map((e) => e.key),
+      brute(entries, q, undefined, 1000),
+      q,
+    );
+  }
 });

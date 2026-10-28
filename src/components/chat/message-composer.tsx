@@ -188,7 +188,7 @@ export const MessageComposer = memo(
 
     return (
       // safe-space: respeta la barra inferior/home indicator de iPhone y los bordes.
-      <div className="safe-space shrink-0 border-t bg-background pt-3">
+      <div className="safe-space glass shrink-0 border-t pt-3">
         <AttachmentComposer
           attachments={pending}
           onRemove={removePending}
@@ -240,6 +240,7 @@ export const MessageComposer = memo(
           <Button
             type="button"
             size="icon"
+            className="rounded-full"
             // Evita que el botón robe el foco: el teclado del móvil no se cierra al enviar.
             onPointerDown={(e) => e.preventDefault()}
             onClick={handleSend}

@@ -164,6 +164,7 @@ export async function listMessagesPageUnchecked(
 export async function listMessagesAroundUnchecked(
   conversationId: string,
   messageId: string,
+  maxNewer = 150,
 ): Promise<ListMessagesResult | null> {
   const target = await prisma.message.findFirst({
     where: { id: messageId, conversationId },
@@ -176,7 +177,7 @@ export async function listMessagesAroundUnchecked(
       where: { conversationId, createdAt: { gte: target.createdAt } },
       include,
       orderBy: { createdAt: "asc" },
-      take: 151,
+      take: maxNewer + 1,
     }),
     prisma.message.findMany({
       where: { conversationId, createdAt: { lt: target.createdAt } },
@@ -186,7 +187,7 @@ export async function listMessagesAroundUnchecked(
     }),
   ]);
 
-  if (newer.length > 150) return null;
+  if (newer.length > maxNewer) return null;
 
   const hasMore = older.length > 25;
   const olderAsc = (hasMore ? older.slice(0, 25) : older).reverse();

@@ -11,6 +11,7 @@ import {
 import {
   listMessagesPageUnchecked,
   listMessagesAfterUnchecked,
+  listMessagesAroundUnchecked,
   listChangedMessagesUnchecked,
   loadSyncHeads,
   MESSAGE_INCLUDE,
@@ -59,6 +60,19 @@ export async function listMessagesAction(
   const session = await requireSession();
   await assertParticipant(conversationId, session.userId);
   return listMessagesPageUnchecked(conversationId, cursor);
+}
+
+/**
+ * Ventana de mensajes alrededor de uno concreto (para saltar a una coincidencia de la
+ * búsqueda dentro del chat). Admite hasta 1500 posteriores; null si hay más.
+ */
+export async function listMessagesAroundAction(
+  conversationId: string,
+  messageId: string,
+): Promise<ListMessagesResult | null> {
+  const session = await requireSession();
+  await assertParticipant(conversationId, session.userId);
+  return listMessagesAroundUnchecked(conversationId, messageId, 1500);
 }
 
 /**

@@ -6,7 +6,7 @@
 
 @theme inline {
     --font-heading: var(--font-sans);
-    --font-sans: var(--font-sans);
+    --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", var(--font-geist-sans), "Segoe UI", Roboto, system-ui, sans-serif;
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -49,79 +49,80 @@
 
 :root {
     /* Hace que los widgets nativos del navegador (popup de <select>, checkboxes,
-       scrollbars, inputs de archivo) se dibujen en el mismo esquema que el tema.
-       Sin esto, en modo oscuro el popup del <select> sale blanco con letras
-       casi blancas, porque el UA asume esquema claro. */
+       scrollbars, inputs de archivo) se dibujen en el mismo esquema que el tema. */
     color-scheme: light;
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
+
+    /* Paleta "cielo": blanco frío + azul sistema (estilo iOS). Los grises llevan un
+       toque de azul (hue ~250) para que la interfaz no se vea monocromática. */
+    --background: oklch(0.985 0.006 245);
+    --foreground: oklch(0.2 0.025 255);
     --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
+    --card-foreground: oklch(0.2 0.025 255);
     --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
-    --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
+    --popover-foreground: oklch(0.2 0.025 255);
+    --primary: oklch(0.6 0.2 256);
+    --primary-foreground: oklch(0.99 0.005 250);
+    --secondary: oklch(0.95 0.018 245);
+    --secondary-foreground: oklch(0.3 0.05 255);
+    --muted: oklch(0.955 0.014 245);
+    --muted-foreground: oklch(0.5 0.03 255);
+    --accent: oklch(0.935 0.04 240);
+    --accent-foreground: oklch(0.34 0.12 258);
+    --destructive: oklch(0.58 0.23 27);
+    --border: oklch(0.915 0.014 245);
+    --input: oklch(0.9 0.018 245);
+    --ring: oklch(0.7 0.15 250);
+    --chart-1: oklch(0.78 0.12 235);
+    --chart-2: oklch(0.68 0.16 245);
+    --chart-3: oklch(0.6 0.2 256);
+    --chart-4: oklch(0.5 0.19 262);
+    --chart-5: oklch(0.4 0.15 265);
+    --radius: 0.875rem;
+    --sidebar: oklch(0.975 0.012 240);
+    --sidebar-foreground: oklch(0.2 0.025 255);
+    --sidebar-primary: oklch(0.6 0.2 256);
+    --sidebar-primary-foreground: oklch(0.99 0.005 250);
+    --sidebar-accent: oklch(0.935 0.04 240);
+    --sidebar-accent-foreground: oklch(0.34 0.12 258);
+    --sidebar-border: oklch(0.915 0.014 245);
+    --sidebar-ring: oklch(0.7 0.15 250);
 }
 
 .dark {
     color-scheme: dark;
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.556 0 0);
+    /* Azul noche en lugar de gris neutro. */
+    --background: oklch(0.165 0.028 258);
+    --foreground: oklch(0.96 0.01 250);
+    --card: oklch(0.205 0.032 258);
+    --card-foreground: oklch(0.96 0.01 250);
+    --popover: oklch(0.225 0.034 258);
+    --popover-foreground: oklch(0.96 0.01 250);
+    --primary: oklch(0.63 0.2 255);
+    --primary-foreground: oklch(0.99 0.005 250);
+    --secondary: oklch(0.27 0.035 258);
+    --secondary-foreground: oklch(0.96 0.01 250);
+    --muted: oklch(0.255 0.035 258);
+    --muted-foreground: oklch(0.72 0.035 250);
+    --accent: oklch(0.31 0.07 256);
+    --accent-foreground: oklch(0.92 0.04 245);
+    --destructive: oklch(0.7 0.19 22);
+    --border: oklch(1 0 0 / 9%);
+    --input: oklch(1 0 0 / 13%);
+    --ring: oklch(0.6 0.17 252);
+    --chart-1: oklch(0.78 0.12 235);
+    --chart-2: oklch(0.68 0.16 245);
+    --chart-3: oklch(0.6 0.2 256);
+    --chart-4: oklch(0.5 0.19 262);
+    --chart-5: oklch(0.4 0.15 265);
+    --sidebar: oklch(0.195 0.03 258);
+    --sidebar-foreground: oklch(0.96 0.01 250);
+    --sidebar-primary: oklch(0.63 0.2 255);
+    --sidebar-primary-foreground: oklch(0.99 0.005 250);
+    --sidebar-accent: oklch(0.31 0.07 256);
+    --sidebar-accent-foreground: oklch(0.92 0.04 245);
+    --sidebar-border: oklch(1 0 0 / 9%);
+    --sidebar-ring: oklch(0.6 0.17 252);
 }
-
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -258,4 +259,36 @@
 
 @media (prefers-reduced-motion: reduce) {
   .message-in, .message-flash { animation: none; }
+}
+
+/* ---- Estilo Apple: tipografía y vidrio ---------------------------------------- */
+.font-heading, h1, h2, h3 { letter-spacing: -0.012em; }
+html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+
+/* Superficie "vidrio esmerilado": translúcida con desenfoque del fondo. */
+.glass {
+  background-color: color-mix(in oklch, var(--background) 78%, transparent);
+  -webkit-backdrop-filter: saturate(1.6) blur(18px);
+  backdrop-filter: saturate(1.6) blur(18px);
+}
+
+/* Fondo suave con tinte azul para las pantallas de entrada y el launcher. */
+.sky-backdrop {
+  background-image:
+    radial-gradient(60rem 40rem at 10% -10%, color-mix(in oklch, var(--primary) 16%, transparent), transparent 60%),
+    radial-gradient(50rem 36rem at 100% 0%, color-mix(in oklch, oklch(0.8 0.1 215) 22%, transparent), transparent 60%);
+}
+
+/* ---- Búsqueda en el chat -------------------------------------------------------- */
+/* El texto coincidente (::highlight) se inyecta desde use-search-highlights.ts: el procesador de CSS del build no reconoce ese pseudo-elemento. */
+/* Fila del mensaje: tenue en cada coincidencia, marcada en la seleccionada. */
+.search-match-row,
+.search-current-row {
+  border-radius: 0.875rem;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+.search-match-row { background-color: color-mix(in oklch, var(--primary) 6%, transparent); }
+.search-current-row {
+  background-color: color-mix(in oklch, var(--primary) 14%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--primary) 38%, transparent);
 }

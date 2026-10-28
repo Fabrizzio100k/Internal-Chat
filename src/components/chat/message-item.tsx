@@ -22,6 +22,8 @@ type Props = {
   senderLabel: string | null;
   isEditing: boolean;
   isHighlighted: boolean;
+  /** Coincidencia de la búsqueda en el chat: "current" = la seleccionada con las flechas. */
+  matchState?: "match" | "current" | null;
   onCopy: (content: string) => void;
   onStartEdit: (messageId: string) => void;
   onCancelEdit: () => void;
@@ -94,6 +96,7 @@ export const MessageItem = memo(function MessageItem({
   senderLabel,
   isEditing,
   isHighlighted,
+  matchState = null,
   onCopy,
   onStartEdit,
   onCancelEdit,
@@ -155,6 +158,8 @@ export const MessageItem = memo(function MessageItem({
         isOwn ? "items-end" : "items-start",
         message.isNew && "message-in",
         isHighlighted && "message-flash",
+        matchState === "match" && "search-match-row",
+        matchState === "current" && "search-current-row",
       )}
     >
       {senderLabel && (
@@ -179,9 +184,11 @@ export const MessageItem = memo(function MessageItem({
         >
           <div
             className={cn(
-              "max-w-[85%] min-w-0 rounded-2xl px-3.5 py-2 text-sm wrap-anywhere whitespace-pre-wrap sm:max-w-md",
+              "max-w-[85%] min-w-0 rounded-[1.25rem] px-3.5 py-2 text-sm wrap-anywhere whitespace-pre-wrap sm:max-w-md",
               hasCode && "sm:max-w-lg",
-              isOwn ? "bg-primary text-primary-foreground" : "bg-muted text-foreground",
+              isOwn
+                ? "bg-linear-to-b from-primary/85 to-primary text-primary-foreground shadow-sm shadow-primary/20"
+                : "bg-muted text-foreground",
               message.content || isDeleted ? "" : "bg-transparent p-0",
               isDeleted && "italic opacity-70",
               message.pending && "opacity-60",

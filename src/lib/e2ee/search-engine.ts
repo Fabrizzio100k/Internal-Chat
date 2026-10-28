@@ -17,6 +17,15 @@ export function normalize(text: string): string {
   return text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
 }
 
+/** Etiquetas de una entrada para filtrar por tipo (máscara de bits). */
+export const FLAG = {
+  LINK: 1,
+  IMAGE: 2,
+  VIDEO: 4,
+  /** Archivo que no es imagen ni video (documentos, audio, etc.). */
+  FILE: 8,
+} as const;
+
 export type EngineEntry = {
   /** Clave única (id del mensaje, o `${mensaje}#${archivo}` para archivos). */
   key: string;
@@ -25,10 +34,24 @@ export type EngineEntry = {
   createdAt: number;
   /** Texto ya normalizado. */
   norm: string;
+  /** Combinación de FLAG.*; 0 si no aplica ninguna. */
+  flags?: number;
+};
+
+export type SearchOptions = {
+  conversationId?: string;
+  limit: number;
+  /**
+   * Solo entradas con ALGUNA de estas etiquetas. Con `query` vacío y `flags` se "navega"
+   * (todas las entradas de ese tipo, de la más reciente a la más antigua).
+   */
+  flags?: number;
 };
 
 const GRAM = 3;
 const COMPACT_MIN_DEAD = 2048;
+/** Hasta este límite se usa una lista corta ordenada; por encima, se acumula y ordena una vez. */
+const TOP_K_MAX = 64;
 
 function* grams(text: string): Generator<string> {
   for (let i = 0; i + GRAM <= text.length; i++) yield text.slice(i, i + GRAM);
@@ -108,28 +131,38 @@ export class TrigramIndex {
 
   /**
    * Entradas cuyo texto contiene `query` (ya normalizado), de la más reciente a la más
-   * antigua. `conversationId` limita a un chat. Con menos de 2 letras no devuelve nada.
+   * antigua. Con 1 sola letra no devuelve nada (demasiado ruido); con `query` vacío solo
+   * si se indica `flags` (modo "navegar por tipo").
    */
-  search(query: string, options: { conversationId?: string; limit: number }): EngineEntry[] {
-    if (query.length < 2 || options.limit <= 0) return [];
-    const { conversationId, limit } = options;
-    // Solo se conservan los `limit` más recientes (inserción en una lista corta ordenada):
-    // evita acumular y ordenar cientos de miles de coincidencias, y permite saltarse el
-    // `includes` de todo lo que ya no puede entrar entre los mejores.
+  search(query: string, options: SearchOptions): EngineEntry[] {
+    const { conversationId, limit, flags } = options;
+    if (limit <= 0 || query.length === 1) return [];
+    if (query.length === 0 && !flags) return [];
+
+    // Pocos resultados: lista corta ordenada (permite saltarse el `includes` de lo que ya no
+    // puede entrar). Muchos (navegación de coincidencias): se acumulan y se ordenan una vez.
+    const small = limit <= TOP_K_MAX;
     const top: EngineEntry[] = [];
+    const all: EngineEntry[] = [];
     const accept = (entry: EngineEntry | undefined) => {
       if (!entry) return;
       if (conversationId !== undefined && entry.conversationId !== conversationId) return;
-      if (top.length === limit && entry.createdAt <= top[limit - 1].createdAt) return;
-      if (!entry.norm.includes(query)) return;
-      let at = top.length;
-      while (at > 0 && top[at - 1].createdAt < entry.createdAt) at--;
-      top.splice(at, 0, entry);
-      if (top.length > limit) top.pop();
+      if (flags && ((entry.flags ?? 0) & flags) === 0) return;
+      if (small) {
+        if (top.length === limit && entry.createdAt <= top[limit - 1].createdAt) return;
+        if (query && !entry.norm.includes(query)) return;
+        let at = top.length;
+        while (at > 0 && top[at - 1].createdAt < entry.createdAt) at--;
+        top.splice(at, 0, entry);
+        if (top.length > limit) top.pop();
+      } else {
+        if (query && !entry.norm.includes(query)) return;
+        all.push(entry);
+      }
     };
 
     if (query.length < GRAM) {
-      // Sin trigrama posible: recorrido lineal en memoria (rápido incluso con cientos de miles).
+      // Sin trigrama posible (navegar por tipo o 2 letras): recorrido lineal en memoria.
       for (const entry of this.entries) accept(entry);
     } else {
       const lists: number[][] = [];
@@ -146,6 +179,8 @@ export class TrigramIndex {
       for (const slot of candidates) accept(this.entries[slot]);
     }
 
-    return top;
+    if (small) return top;
+    all.sort((a, b) => b.createdAt - a.createdAt);
+    return all.length > limit ? all.slice(0, limit) : all;
   }
 }

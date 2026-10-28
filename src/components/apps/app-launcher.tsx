@@ -24,15 +24,15 @@ export function AppLauncher() {
           >
             <Link
               href={app.href}
-              className="group block rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+              className="group block rounded-2xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
               aria-label={`Abrir ${app.name}`}
             >
-              <Card className="h-full transition-shadow group-hover:shadow-md group-hover:ring-foreground/20">
+              <Card className="h-full transition-all duration-200 group-hover:-translate-y-0.5 group-hover:shadow-lg group-hover:shadow-primary/10 group-hover:ring-primary/30">
                 <CardHeader>
                   <div className="mb-2 flex items-center gap-3">
                     <span
                       className={cn(
-                        "flex size-10 items-center justify-center rounded-lg",
+                        "flex size-11 items-center justify-center rounded-xl shadow-sm",
                         app.accentClassName,
                       )}
                     >

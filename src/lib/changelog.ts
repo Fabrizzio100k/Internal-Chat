@@ -19,6 +19,17 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.3.0",
+    date: "2026-10-28",
+    title: "Búsqueda integrada y nuevo diseño",
+    highlights: [
+      "Buscar ya no abre una ventana: dentro del chat se despliega una barra con filtros por enlaces, imágenes, videos y archivos, contador de coincidencias y flechas para saltar entre ellas.",
+      "Las coincidencias se resaltan directamente en los mensajes (Ctrl/Cmd + F abre la búsqueda del chat).",
+      "La búsqueda general ahora vive en la barra lateral, con los mismos filtros.",
+      "Interfaz renovada con tonos azules y celestes, tipografía del sistema, esquinas más suaves y efecto de vidrio, también en modo oscuro.",
+    ],
+  },
+  {
     version: "0.2.0",
     date: "2026-10-28",
     title: "Más control y búsqueda más rápida",

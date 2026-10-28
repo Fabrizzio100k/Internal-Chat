@@ -32,7 +32,7 @@ export const APPS: AppEntry[] = [
       "Conversaciones 1 a 1 en tiempo real, con solicitudes de contacto, adjuntos, estado de escritura y presencia.",
     href: "/chat",
     icon: MessageCircle,
-    accentClassName: "bg-primary/10 text-primary",
+    accentClassName: "bg-linear-to-br from-sky-400 to-blue-600 text-white",
     available: true,
   },
   {
@@ -44,7 +44,7 @@ export const APPS: AppEntry[] = [
     href: "/hombrepost",
     icon: Send,
     badge: "beta",
-    accentClassName: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+    accentClassName: "bg-linear-to-br from-indigo-400 to-violet-600 text-white",
     available: true,
   },
 ];

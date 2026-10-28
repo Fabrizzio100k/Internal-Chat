@@ -44,7 +44,7 @@ export function MessageContextMenu({
       </ContextMenuPrimitive.Trigger>
       <ContextMenuPrimitive.Portal>
         <ContextMenuPrimitive.Positioner className="isolate z-50 outline-none">
-          <ContextMenuPrimitive.Popup className="min-w-36 origin-(--transform-origin) overflow-hidden rounded-lg border bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95">
+          <ContextMenuPrimitive.Popup className="min-w-36 origin-(--transform-origin) overflow-hidden rounded-xl border bg-popover/95 p-1 backdrop-blur-xl text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95">
             {canCopy && (
               <ContextMenuPrimitive.Item
                 className={cn(
