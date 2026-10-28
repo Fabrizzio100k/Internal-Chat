@@ -12,7 +12,7 @@ import { useDropzone } from "react-dropzone";
 import { ChatSearchBar, type SearchView } from "@/components/chat/chat-search-bar";
 import { useSearchHighlights } from "@/hooks/use-search-highlights";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bookmark, Loader2, Lock, Menu, Search, ShieldAlert, UploadCloud, Users } from "lucide-react";
+import { Bookmark, ChevronDown, Loader2, Lock, Menu, Search, ShieldAlert, UploadCloud, Users } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -58,6 +58,7 @@ type SecurityNotice =
 
 const SCROLL_TOP_THRESHOLD = 80; // px desde arriba para disparar "cargar más"
 const STICK_BOTTOM_THRESHOLD = 120; // px desde el fondo para seguir pegado al final
+const JUMP_BUTTON_THRESHOLD = 320; // px desde el fondo para mostrar "ir al último mensaje"
 
 function scrollToBottom(el: HTMLElement) {
   el.scrollTop = el.scrollHeight;
@@ -103,6 +104,8 @@ export function ChatWindow({
   const [isGroupInfoOpen, setIsGroupInfoOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchView, setSearchView] = useState<SearchView | null>(null);
+  const [showJump, setShowJump] = useState(false);
+  const [awayCount, setAwayCount] = useState(0);
   const [isEncryptionOpen, setIsEncryptionOpen] = useState(false);
   const [notice, setNotice] = useState<SecurityNotice | null>(null);
   const members = group.members;
@@ -284,6 +287,10 @@ export function ChatWindow({
       const distanceFromBottom =
         container.scrollHeight - container.scrollTop - container.clientHeight;
       shouldStickToBottom.current = distanceFromBottom < STICK_BOTTOM_THRESHOLD;
+      // Solo hay setState cuando el botón realmente cambia de visible a oculto (o al revés).
+      const far = distanceFromBottom > JUMP_BUTTON_THRESHOLD;
+      setShowJump((prev) => (prev === far ? prev : far));
+      if (!far) setAwayCount((prev) => (prev === 0 ? prev : 0));
       if (container.scrollTop <= SCROLL_TOP_THRESHOLD) void loadOlder();
     });
   }, [loadOlder]);
@@ -310,11 +317,15 @@ export function ChatWindow({
           void checkSecurity();
         }
 
-        decryptWireMessage(incoming).then((message) =>
+        decryptWireMessage(incoming).then((message) => {
+          // Llegó algo mientras el usuario lee historial: el botón muestra cuántos mensajes nuevos hay.
+          if (!incoming.kind && incoming.senderId !== currentUser.userId && !shouldStickToBottom.current) {
+            setAwayCount((count) => count + 1);
+          }
           setMessages((prev) =>
             prev.some((m) => m.id === message.id) ? prev : [...prev, { ...message, isNew: true }],
-          ),
-        );
+          );
+        });
         return;
       }
       case "message_updated": {
@@ -519,6 +530,15 @@ export function ChatWindow({
   }, [messages]);
 
   const openSearch = useCallback(() => setIsSearchOpen(true), []);
+
+  // Botón "ir al último mensaje".
+  const jumpToLatest = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    shouldStickToBottom.current = true;
+    container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+    setAwayCount(0);
+  }, []);
   const closeSearch = useCallback(() => {
     setIsSearchOpen(false);
     setSearchView(null);
@@ -738,6 +758,7 @@ export function ChatWindow({
         />
       )}
 
+      <div className="relative flex min-h-0 flex-1 flex-col">
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
@@ -800,6 +821,35 @@ export function ChatWindow({
             </div>
           )}
         </div>
+      </div>
+
+      {/* Salto al último mensaje: aparece solo al alejarse del final de la conversación. */}
+      <AnimatePresence>
+        {showJump && (
+          <motion.button
+            key="jump-latest"
+            type="button"
+            onClick={jumpToLatest}
+            initial={{ opacity: 0, scale: 0.8, y: 8 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.8, y: 8 }}
+            transition={{ type: "spring", stiffness: 500, damping: 34 }}
+            className="glass absolute right-4 bottom-4 z-10 flex size-10 items-center justify-center rounded-full text-primary shadow-lg shadow-black/10 ring-1 ring-foreground/10 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60"
+            aria-label={
+              awayCount > 0
+                ? `Ir al último mensaje (${awayCount} nuevo${awayCount === 1 ? "" : "s"})`
+                : "Ir al último mensaje"
+            }
+          >
+            <ChevronDown className="size-5" />
+            {awayCount > 0 && (
+              <span className="absolute -top-1.5 -right-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground shadow-sm">
+                {awayCount > 99 ? "99+" : awayCount}
+              </span>
+            )}
+          </motion.button>
+        )}
+      </AnimatePresence>
       </div>
 
       <AnimatePresence>

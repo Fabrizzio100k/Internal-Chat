@@ -135,3 +135,16 @@ export async function deleteStoredObject(key: string): Promise<boolean> {
     return false;
   }
 }
+
+/** Borra muchos objetos con concurrencia limitada (best effort). Devuelve cuántos fallaron. */
+export async function deleteStoredObjects(keys: string[], concurrency = 8): Promise<number> {
+  let failed = 0;
+  const queue = [...new Set(keys)];
+  const worker = async () => {
+    for (let key = queue.shift(); key !== undefined; key = queue.shift()) {
+      if (!(await deleteStoredObject(key))) failed++;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
+  return failed;
+}

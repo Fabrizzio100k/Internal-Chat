@@ -16,8 +16,9 @@ import {
   wrapIdentity,
   type AccountSecrets,
 } from "@/lib/e2ee/crypto";
-import { saveIdentity, wipeLocalSecrets, type StoredIdentity } from "@/lib/e2ee/key-store";
-import { setActiveIdentity } from "@/lib/e2ee/session";
+import { saveIdentity, wipeAllLocalData, wipeLocalSecrets, type StoredIdentity } from "@/lib/e2ee/key-store";
+import { getActiveIdentity, setActiveIdentity } from "@/lib/e2ee/session";
+import { deleteAccountAction } from "@/lib/actions/account";
 import type { MyKeysPayload } from "@/lib/types/e2ee";
 import type { AuthActionResult } from "@/lib/types/auth";
 
@@ -138,4 +139,27 @@ export async function signOut(): Promise<void> {
   setActiveIdentity(null);
   await wipeLocalSecrets();
   await logoutAction();
+}
+
+/**
+ * Elimina la cuenta y todos sus datos (ver deleteAccountAction). La contraseña se
+ * transforma aquí en `authSecret`: el servidor la comprueba sin recibirla. Si el servidor
+ * acepta, este navegador también borra claves, índice y claves fijadas de otras personas.
+ */
+export async function deleteMyAccount(
+  password: string,
+  confirmation: string,
+): Promise<{ success: boolean; error?: string }> {
+  const identity = getActiveIdentity();
+  if (!identity) return { success: false, error: "Desbloquea tus mensajes primero." };
+  try {
+    const secrets = await deriveAccountSecrets(identity.username, password);
+    const result = await deleteAccountAction({ confirmation, authSecret: secrets.authSecret });
+    if (!result.success) return { success: false, error: result.error };
+  } catch {
+    return { success: false, error: NETWORK_ERROR };
+  }
+  setActiveIdentity(null);
+  await wipeAllLocalData();
+  return { success: true };
 }

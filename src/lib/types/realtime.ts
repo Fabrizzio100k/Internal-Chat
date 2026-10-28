@@ -23,6 +23,8 @@ export type InboxEvent =
   | { type: "keys_updated"; conversationId: string }
   | { type: "conversation_added"; conversationId: string }
   | { type: "request_received" }
+  // Una conversación ya no existe para mí (la otra persona eliminó su cuenta).
+  | { type: "conversation_removed"; conversationId: string }
   // Sintético (lo genera el cliente al reconectar): hay que re-sincronizar.
   | { type: "resync" };
 

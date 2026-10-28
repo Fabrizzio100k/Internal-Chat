@@ -313,6 +313,11 @@ export function ChatSidebar({
       case "conversation_added":
         refreshItem(event.conversationId);
         return;
+      case "conversation_removed":
+        // La otra persona eliminó su cuenta: el chat deja de existir.
+        setConversations((prev) => prev.filter((c) => c.id !== event.conversationId));
+        if (activeConversationIdRef.current === event.conversationId) router.replace("/chat");
+        return;
       case "request_received":
         listPendingRequestsAction()
           .then(setPendingRequests)
@@ -768,13 +773,22 @@ export function ChatSidebar({
         >
           v{APP_VERSION}
         </button>
-        <button
-          type="button"
-          onClick={() => openInfo("devices")}
-          className="rounded px-1 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-        >
-          Dispositivos
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => openInfo("devices")}
+            className="rounded px-1 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            Dispositivos
+          </button>
+          <button
+            type="button"
+            onClick={() => openInfo("account")}
+            className="rounded px-1 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            Cuenta
+          </button>
+        </div>
       </div>
       </aside>
 

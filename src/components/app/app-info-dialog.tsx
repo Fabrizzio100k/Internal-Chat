@@ -16,6 +16,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ChangelogList } from "@/components/app/changelog-list";
+import { DeleteAccountPanel } from "@/components/app/delete-account-panel";
 import {
   listSessionsAction,
   revokeOtherSessionsAction,
@@ -25,7 +26,7 @@ import { CHANGELOG } from "@/lib/changelog";
 import { APP_VERSION } from "@/lib/version";
 import type { DeviceSessionItem } from "@/lib/types/sessions";
 
-export type InfoTab = "news" | "devices";
+export type InfoTab = "news" | "devices" | "account";
 
 const DEVICE_ICON = { desktop: Monitor, mobile: Smartphone, tablet: Tablet } as const;
 
@@ -48,7 +49,7 @@ export function AppInfoDialog({
       <DialogContent className="flex max-h-[85dvh] flex-col sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Versión {APP_VERSION}</DialogTitle>
-          <DialogDescription>Novedades de la app y dispositivos donde iniciaste sesión.</DialogDescription>
+          <DialogDescription>Novedades de la app, dispositivos y tu cuenta.</DialogDescription>
         </DialogHeader>
         <Tabs
           value={tab}
@@ -62,6 +63,9 @@ export function AppInfoDialog({
             <TabsTrigger value="devices" className="flex-1">
               Dispositivos
             </TabsTrigger>
+            <TabsTrigger value="account" className="flex-1">
+              Cuenta
+            </TabsTrigger>
           </TabsList>
           <TabsContent value="news" className="min-h-0 overflow-y-auto py-3 pr-1">
             <ChangelogList entries={CHANGELOG} />
@@ -70,9 +74,20 @@ export function AppInfoDialog({
             {/* Se monta solo con la pestaña activa y el diálogo abierto: carga fresca cada vez. */}
             {open && tab === "devices" && <DevicesPanel />}
           </TabsContent>
+          <TabsContent value="account" className="min-h-0 overflow-y-auto py-3 pr-1">
+            {open && tab === "account" && <AccountPanel />}
+          </TabsContent>
         </Tabs>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function AccountPanel() {
+  return (
+    <div className="flex flex-col gap-3">
+      <DeleteAccountPanel />
+    </div>
   );
 }
 

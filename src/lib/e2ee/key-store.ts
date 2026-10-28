@@ -238,6 +238,24 @@ export async function wipeLocalSecrets(): Promise<void> {
   }
 }
 
+/**
+ * Eliminación de cuenta: además de lo anterior borra las claves públicas fijadas (TOFU)
+ * de otras personas, que también son datos de este navegador.
+ */
+export async function wipeAllLocalData(): Promise<void> {
+  try {
+    const db = await openDb();
+    const tx = db.transaction(["identity", "pins", "search", "searchMeta"], "readwrite");
+    tx.objectStore("identity").clear();
+    tx.objectStore("pins").clear();
+    tx.objectStore("search").clear();
+    tx.objectStore("searchMeta").clear();
+    await done(tx);
+  } catch {
+    // Sin IndexedDB no hay nada que borrar.
+  }
+}
+
 export async function getSearchDoc(ownerId: string, messageId: string): Promise<SearchDoc | null> {
   const found = await wrap((await store("search", "readonly")).get(`${ownerId}:${messageId}`));
   return (found as SearchDoc | undefined) ?? null;

@@ -19,6 +19,15 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.3.1",
+    date: "2026-10-28",
+    title: "Ir al último mensaje y eliminar cuenta",
+    highlights: [
+      "Al subir por el historial aparece un botón abajo a la derecha para volver al mensaje más reciente (con el número de mensajes nuevos que llegaron mientras tanto).",
+      "Nueva sección «Cuenta» (abajo a la derecha de la lista de chats) para eliminar tu cuenta y todos tus datos, con confirmación escrita y tu contraseña.",
+    ],
+  },
+  {
     version: "0.3.0",
     date: "2026-10-28",
     title: "Búsqueda integrada y nuevo diseño",
