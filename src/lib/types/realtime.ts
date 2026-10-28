@@ -23,6 +23,8 @@ export type InboxEvent =
   | { type: "keys_updated"; conversationId: string }
   | { type: "conversation_added"; conversationId: string }
   | { type: "request_received" }
+  // Se cerró sesión de forma remota en estos dispositivos: el que coincida debe salir al instante.
+  | { type: "session_revoked"; sessionIds: string[] }
   // Una conversación ya no existe para mí (la otra persona eliminó su cuenta).
   | { type: "conversation_removed"; conversationId: string }
   // Sintético (lo genera el cliente al reconectar): hay que re-sincronizar.

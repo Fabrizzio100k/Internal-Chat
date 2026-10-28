@@ -2,6 +2,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { forgetSessionValidation, getSession } from "@/lib/auth";
+import { publishToUsersAfter } from "@/lib/realtime-server";
 import { APP_VERSION } from "@/lib/version";
 import type { ActionResult } from "@/lib/types/chat";
 import type { DeviceSessionItem } from "@/lib/types/sessions";
@@ -47,6 +48,8 @@ export async function revokeSessionAction(sessionId: string): Promise<ActionResu
   });
   if (result.count === 0) return { success: false, error: "Esa sesión ya no existe" };
   forgetSessionValidation(sessionId);
+  // Aviso inmediato al dispositivo remoto (si está conectado); si no, lo detecta al reconectar o en su chequeo periódico.
+  publishToUsersAfter([session.userId], { type: "session_revoked", sessionIds: [sessionId] });
   return { success: true };
 }
 
@@ -63,6 +66,10 @@ export async function revokeOtherSessionsAction(): Promise<ActionResult & { coun
     data: { revokedAt: new Date() },
   });
   others.forEach((o) => forgetSessionValidation(o.id));
+  publishToUsersAfter([session.userId], {
+    type: "session_revoked",
+    sessionIds: others.map((o) => o.id),
+  });
   return { success: true, count: others.length };
 }
 

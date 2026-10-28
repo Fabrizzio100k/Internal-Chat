@@ -19,6 +19,15 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.5.0",
+    date: "2026-10-28",
+    title: "Cierre de sesión remoto al instante",
+    highlights: [
+      "En Ajustes → Dispositivos puedes cerrar la sesión de cualquier otro dispositivo, y ahora surte efecto al instante: ese dispositivo sale solo y borra las claves de cifrado que guardaba.",
+      "Cerrar todas las demás sesiones pide una confirmación antes de ejecutarse.",
+    ],
+  },
+  {
     version: "0.4.0",
     date: "2026-10-28",
     title: "Ajustes en un solo lugar",

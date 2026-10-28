@@ -5,7 +5,7 @@ import { LOGIN_EXPIRED_ROUTE } from "@/lib/app-routes";
 import { listConversationsAction, listPendingRequestsAction } from "@/lib/actions/chat";
 import { inboxTopic } from "@/lib/realtime-server";
 import { ChatSidebar } from "@/components/chat/chat-sidebar";
-import { SessionGuard } from "@/components/app/session-guard";
+import { SessionGuard, RemoteSignOutListener } from "@/components/app/session-guard";
 import { WhatsNewDialog } from "@/components/app/whats-new-dialog";
 import { PresenceProvider } from "@/hooks/use-presence";
 import { InboxProvider } from "@/hooks/use-inbox";
@@ -39,6 +39,7 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
             <SidebarProvider>
               <FaviconBadge />
               <SessionGuard />
+              <RemoteSignOutListener sessionId={session.sessionId} />
               <WhatsNewDialog
                 userId={session.userId}
                 lastSeenVersion={versionRow?.lastSeenVersion ?? null}

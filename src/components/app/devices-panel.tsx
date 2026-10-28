@@ -23,6 +23,7 @@ export function DevicesPanel() {
   const [sessions, setSessions] = useState<DeviceSessionItem[] | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [isRevokingAll, startRevokeAll] = useTransition();
+  const [confirmAll, setConfirmAll] = useState(false);
 
   const reload = useCallback(() => {
     listSessionsAction()
@@ -114,12 +115,37 @@ export function DevicesPanel() {
           );
         })}
       </ul>
-      {others.length > 0 && (
-        <Button type="button" variant="destructive" disabled={isRevokingAll} onClick={revokeAll}>
-          {isRevokingAll && <Loader2 className="animate-spin" />}
-          Cerrar las otras {others.length} sesión(es)
-        </Button>
-      )}
+      {others.length > 0 &&
+        (confirmAll ? (
+          <div className="flex flex-col gap-2 rounded-2xl border border-destructive/30 bg-destructive/5 p-3">
+            <p className="text-xs text-muted-foreground">
+              Se cerrará la sesión en {others.length} dispositivo{others.length === 1 ? "" : "s"} al
+              instante y tendrán que volver a iniciar sesión con tu contraseña.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" disabled={isRevokingAll} onClick={() => setConfirmAll(false)}>
+                Cancelar
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={isRevokingAll}
+                onClick={() => {
+                  setConfirmAll(false);
+                  revokeAll();
+                }}
+              >
+                {isRevokingAll && <Loader2 className="animate-spin" />}
+                Sí, cerrar todas
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <Button type="button" variant="destructive" disabled={isRevokingAll} onClick={() => setConfirmAll(true)}>
+            {isRevokingAll && <Loader2 className="animate-spin" />}
+            Cerrar las otras {others.length} sesión(es)
+          </Button>
+        ))}
       <p className="text-xs text-muted-foreground">
         Si no reconoces un dispositivo, ciérralo. Al cerrar una sesión, ese dispositivo pierde el
         acceso a tu cuenta y borra las claves de cifrado que tenía guardadas en cuanto se conecte.
