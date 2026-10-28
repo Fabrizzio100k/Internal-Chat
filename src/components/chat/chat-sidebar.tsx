@@ -4,7 +4,7 @@ import { memo, useCallback, useEffect, useRef, useState, useTransition } from "r
 import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
-import { LogOut, Search, UserPlus, Check, X, LayoutGrid, Users, UsersRound, Bookmark, Pin, PinOff } from "lucide-react";
+import { LayoutGrid, Search, UserPlus, Check, X, Users, UsersRound, Bookmark, Pin, PinOff, Settings } from "lucide-react";
 import { ContextMenu as ContextMenuPrimitive } from "@base-ui/react/context-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -27,7 +27,6 @@ import {
   setConversationPinnedAction,
 } from "@/lib/actions/chat";
 import { sortConversations } from "@/lib/conversation-order";
-import { signOut } from "@/lib/e2ee/account";
 import { decryptPreview } from "@/lib/e2ee/messages";
 import type { ConversationItem } from "@/lib/conversations-server";
 import { LAUNCHER_ROUTE } from "@/lib/app-routes";
@@ -38,11 +37,10 @@ import { useSidebar } from "@/hooks/use-sidebar";
 import { useTypingStatusForConversations } from "@/hooks/use-typing";
 import { PresenceDot } from "@/components/chat/presence-dot";
 import { TypingIndicator } from "@/components/chat/typing-indicator";
-import { ThemeToggle } from "@/components/theme-toggle";
 import { useInboxHandler } from "@/hooks/use-inbox";
 import { CreateGroupDialog } from "@/components/chat/create-group-dialog";
 import { SidebarSearchPanel } from "@/components/chat/sidebar-search-panel";
-import { AppInfoDialog, type InfoTab } from "@/components/app/app-info-dialog";
+import { SettingsDialog, useSettingsState } from "@/components/app/settings-dialog";
 import { APP_VERSION } from "@/lib/version";
 
 type PendingRequestItem = {
@@ -182,12 +180,8 @@ export function ChatSidebar({
   const [isSearching, startSearchTransition] = useTransition();
   const [isGroupOpen, setIsGroupOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [isInfoOpen, setIsInfoOpen] = useState(false);
-  const [infoTab, setInfoTab] = useState<InfoTab>("news");
-  const openInfo = (tab: InfoTab) => {
-    setInfoTab(tab);
-    setIsInfoOpen(true);
-  };
+  const settings = useSettingsState("account");
+  const openSettings = settings.openAt;
   const [, startTransition] = useTransition();
   const { onlineUserIds } = usePresence();
   const { setTotalUnread } = useUnreadTotal();
@@ -506,18 +500,23 @@ export function ChatSidebar({
         )}
       >
       <div className="flex items-center justify-between gap-2 p-4">
-        <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => openSettings("account")}
+          className="flex min-w-0 items-center gap-2 rounded-xl text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          aria-label="Abrir ajustes de la cuenta"
+        >
           <div className="relative">
             <Avatar>
               <AvatarFallback>{currentUser.username.slice(0, 2).toUpperCase()}</AvatarFallback>
             </Avatar>
             <PresenceDot online={onlineUserIds.has(currentUser.userId)} className="absolute -right-0.5 -bottom-0.5" />
           </div>
-          <div className="flex flex-col">
-            <span className="text-sm font-medium leading-tight">{currentUser.username}</span>
+          <div className="flex min-w-0 flex-col">
+            <span className="truncate text-sm font-medium leading-tight">{currentUser.username}</span>
             <span className="text-xs text-muted-foreground">En línea</span>
           </div>
-        </div>
+        </button>
         <div className="flex items-center gap-1">
           <Button
             variant="ghost"
@@ -539,26 +538,21 @@ export function ChatSidebar({
             variant="ghost"
             size="icon-sm"
             aria-label="Volver a las apps"
+            title="Volver a las apps"
             // Se renderiza como <a> (Link): Base UI no debe asumir <button> nativo.
             nativeButton={false}
             render={<Link href={LAUNCHER_ROUTE} />}
           >
             <LayoutGrid />
           </Button>
-          <ThemeToggle />
           <Button
             variant="ghost"
             size="icon-sm"
-            onClick={() => {
-              startTransition(async () => {
-                await signOut();
-                router.push("/login");
-                router.refresh();
-              });
-            }}
-            aria-label="Cerrar sesión"
+            aria-label="Ajustes"
+            title="Ajustes"
+            onClick={() => openSettings("account")}
           >
-            <LogOut />
+            <Settings />
           </Button>
         </div>
       </div>
@@ -763,40 +757,25 @@ export function ChatSidebar({
       )}
       </AnimatePresence>
 
-      {/* Pie discreto: versión actual (abre novedades) y acceso a dispositivos. */}
-      <div className="flex items-center justify-between border-t px-4 py-1.5 text-[11px] text-muted-foreground">
+      {/* Pie discreto: la versión actual; al pulsarla se abren las novedades. */}
+      <div className="flex items-center border-t px-4 py-1.5 text-[11px] text-muted-foreground">
         <button
           type="button"
-          onClick={() => openInfo("news")}
+          onClick={() => openSettings("news")}
           className="rounded px-1 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
           aria-label={`Versión ${APP_VERSION}: ver novedades`}
         >
           v{APP_VERSION}
         </button>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => openInfo("devices")}
-            className="rounded px-1 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-          >
-            Dispositivos
-          </button>
-          <button
-            type="button"
-            onClick={() => openInfo("account")}
-            className="rounded px-1 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-          >
-            Cuenta
-          </button>
-        </div>
       </div>
       </aside>
 
-      <AppInfoDialog
-        open={isInfoOpen}
-        onOpenChange={setIsInfoOpen}
-        tab={infoTab}
-        onTabChange={setInfoTab}
+      <SettingsDialog
+        open={settings.open}
+        onOpenChange={settings.setOpen}
+        section={settings.section}
+        onSectionChange={settings.setSection}
+        username={currentUser.username}
       />
 
       <CreateGroupDialog

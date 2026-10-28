@@ -19,6 +19,17 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.4.0",
+    date: "2026-10-28",
+    title: "Ajustes en un solo lugar",
+    highlights: [
+      "Nuevo engranaje de Ajustes: cuenta y cierre de sesión, apariencia, dispositivos y novedades en una sola ventana.",
+      "Apariencia: elige entre claro, oscuro o automático (sigue a tu sistema).",
+      "La barra superior queda más limpia: el cambio de tema y el cierre de sesión ahora viven en Ajustes.",
+      "También puedes abrir Ajustes tocando tu nombre o avatar, y desde la pantalla de apps.",
+    ],
+  },
+  {
     version: "0.3.1",
     date: "2026-10-28",
     title: "Ir al último mensaje y eliminar cuenta",

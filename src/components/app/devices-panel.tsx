@@ -5,93 +5,21 @@ import { formatDistanceToNow } from "date-fns";
 import { es } from "date-fns/locale";
 import { Loader2, Monitor, Smartphone, Tablet } from "lucide-react";
 import { toast } from "sonner";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ChangelogList } from "@/components/app/changelog-list";
-import { DeleteAccountPanel } from "@/components/app/delete-account-panel";
 import {
   listSessionsAction,
   revokeOtherSessionsAction,
   revokeSessionAction,
 } from "@/lib/actions/sessions";
-import { CHANGELOG } from "@/lib/changelog";
-import { APP_VERSION } from "@/lib/version";
 import type { DeviceSessionItem } from "@/lib/types/sessions";
-
-export type InfoTab = "news" | "devices" | "account";
 
 const DEVICE_ICON = { desktop: Monitor, mobile: Smartphone, tablet: Tablet } as const;
 
 const ago = (date: Date) => formatDistanceToNow(new Date(date), { addSuffix: true, locale: es });
 
-/** Versión actual, historial de novedades y dispositivos con sesión abierta. */
-export function AppInfoDialog({
-  open,
-  onOpenChange,
-  tab,
-  onTabChange,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  tab: InfoTab;
-  onTabChange: (tab: InfoTab) => void;
-}) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[85dvh] flex-col sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Versión {APP_VERSION}</DialogTitle>
-          <DialogDescription>Novedades de la app, dispositivos y tu cuenta.</DialogDescription>
-        </DialogHeader>
-        <Tabs
-          value={tab}
-          onValueChange={(value) => onTabChange(value as InfoTab)}
-          className="flex min-h-0 flex-1 flex-col"
-        >
-          <TabsList className="w-full">
-            <TabsTrigger value="news" className="flex-1">
-              Novedades
-            </TabsTrigger>
-            <TabsTrigger value="devices" className="flex-1">
-              Dispositivos
-            </TabsTrigger>
-            <TabsTrigger value="account" className="flex-1">
-              Cuenta
-            </TabsTrigger>
-          </TabsList>
-          <TabsContent value="news" className="min-h-0 overflow-y-auto py-3 pr-1">
-            <ChangelogList entries={CHANGELOG} />
-          </TabsContent>
-          <TabsContent value="devices" className="min-h-0 overflow-y-auto py-3 pr-1">
-            {/* Se monta solo con la pestaña activa y el diálogo abierto: carga fresca cada vez. */}
-            {open && tab === "devices" && <DevicesPanel />}
-          </TabsContent>
-          <TabsContent value="account" className="min-h-0 overflow-y-auto py-3 pr-1">
-            {open && tab === "account" && <AccountPanel />}
-          </TabsContent>
-        </Tabs>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function AccountPanel() {
-  return (
-    <div className="flex flex-col gap-3">
-      <DeleteAccountPanel />
-    </div>
-  );
-}
-
-function DevicesPanel() {
+/** Dispositivos con sesión abierta: cerrar uno o todos los demás. */
+export function DevicesPanel() {
   const [sessions, setSessions] = useState<DeviceSessionItem[] | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [isRevokingAll, startRevokeAll] = useTransition();
@@ -153,8 +81,10 @@ function DevicesPanel() {
         {sessions.map((session) => {
           const Icon = DEVICE_ICON[session.deviceType];
           return (
-            <li key={session.id} className="flex items-center gap-3 rounded-lg border p-3">
-              <Icon className="size-5 shrink-0 text-muted-foreground" aria-hidden />
+            <li key={session.id} className="flex items-center gap-3 rounded-2xl border p-3">
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                <Icon className="size-4.5" aria-hidden />
+              </span>
               <div className="flex min-w-0 flex-1 flex-col">
                 <span className="flex items-center gap-2 truncate text-sm font-medium">
                   {session.deviceName}
