@@ -89,6 +89,26 @@ describe("identidad", () => {
 });
 
 describe("claves de conversación", () => {
+  it("chat contigo mismo: remitente y destinatario son la misma persona", async () => {
+    const me = await generateIdentity();
+    const raw = generateConversationKeyBytes();
+    const ctx = { conversationId: "self", epoch: 1, recipientId: "yo", wrapperId: "yo" };
+    const wrapped = await wrapConversationKey(
+      raw,
+      await importEcdhPublic(me.ecdhPublicKey),
+      me.extractable.signPrivate,
+      ctx,
+    );
+    const out = await unwrapConversationKey(
+      wrapped.wrappedKey,
+      wrapped.signature,
+      me.extractable.ecdhPrivate,
+      await importSignPublic(me.signPublicKey),
+      ctx,
+    );
+    assert.deepEqual(out, raw);
+  });
+
   async function setup() {
     const alice = await generateIdentity();
     const bob = await generateIdentity();

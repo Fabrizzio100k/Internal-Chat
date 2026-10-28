@@ -23,11 +23,14 @@ type Member = { id: string; username: string };
 type CreatedConversation = {
   id: string;
   isGroup: true;
+  isSelf: false;
   title: string;
   otherUser: null;
   members: Member[];
   lastMessage: null;
   unreadCount: 0;
+  pinnedAt: null;
+  createdAt: Date;
 };
 
 type DialogProps = {
@@ -102,11 +105,14 @@ function CreateGroupDialogInner({ open, onOpenChange, currentUser, onCreated }: 
       onCreated({
         id: result.conversationId,
         isGroup: true,
+        isSelf: false,
         title: trimmed,
         otherUser: null,
         members: [{ id: currentUser.userId, username: currentUser.username }, ...chosen],
         lastMessage: null,
         unreadCount: 0,
+        pinnedAt: null,
+        createdAt: new Date(),
       });
       toast.success("Grupo creado");
       onOpenChange(false);

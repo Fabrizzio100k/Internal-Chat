@@ -4,7 +4,8 @@ import { memo, useCallback, useEffect, useRef, useState, useTransition } from "r
 import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
-import { LogOut, Search, UserPlus, Check, X, LayoutGrid, Users, UsersRound } from "lucide-react";
+import { LogOut, Search, UserPlus, Check, X, LayoutGrid, Users, UsersRound, Bookmark, Pin, PinOff } from "lucide-react";
+import { ContextMenu as ContextMenuPrimitive } from "@base-ui/react/context-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,7 +23,10 @@ import {
   sendChatRequestAction,
   acceptChatRequestAction,
   rejectChatRequestAction,
+  openSelfChatAction,
+  setConversationPinnedAction,
 } from "@/lib/actions/chat";
+import { sortConversations } from "@/lib/conversation-order";
 import { signOut } from "@/lib/e2ee/account";
 import { decryptPreview } from "@/lib/e2ee/messages";
 import type { ConversationItem } from "@/lib/conversations-server";
@@ -58,6 +62,7 @@ const ConversationRow = memo(function ConversationRow({
   isOnline,
   isTyping,
   onOpen,
+  onTogglePin,
 }: {
   conversation: ConversationItem;
   /** Vista previa del último mensaje, ya descifrada en el navegador. */
@@ -66,57 +71,93 @@ const ConversationRow = memo(function ConversationRow({
   isOnline: boolean;
   isTyping: boolean;
   onOpen: (id: string) => void;
+  onTogglePin: (id: string, pinned: boolean) => void;
 }) {
   const unreadLabel = formatUnreadCount(isActive ? 0 : conversation.unreadCount);
+  const isPinned = conversation.pinnedAt !== null;
+  const pinLabel = isPinned ? "Desfijar chat" : "Fijar chat";
   return (
-    <button
-      type="button"
-      onClick={() => onOpen(conversation.id)}
-      className={cn(
-        "flex items-center gap-2.5 rounded-lg p-2 text-left transition-colors hover:bg-muted",
-        isActive && "bg-muted",
-      )}
-    >
-      <div className="relative">
-        <Avatar>
-          <AvatarFallback>
-            {conversation.isGroup ? (
-              <Users className="size-4" />
+    <ContextMenuPrimitive.Root>
+      <ContextMenuPrimitive.Trigger className="group/row relative touch-manipulation max-md:select-none">
+        <button
+          type="button"
+          onClick={() => onOpen(conversation.id)}
+          className={cn(
+            "flex w-full items-center gap-2.5 rounded-lg p-2 text-left transition-colors hover:bg-muted",
+            isActive && "bg-muted",
+          )}
+        >
+          <div className="relative">
+            <Avatar>
+              <AvatarFallback>
+                {conversation.isGroup ? (
+                  <Users className="size-4" />
+                ) : conversation.isSelf ? (
+                  <Bookmark className="size-4" />
+                ) : (
+                  conversation.title.slice(0, 2).toUpperCase()
+                )}
+              </AvatarFallback>
+            </Avatar>
+            {!conversation.isGroup && !conversation.isSelf && (
+              <PresenceDot online={isOnline} className="absolute -right-0.5 -bottom-0.5" />
+            )}
+          </div>
+          <div className="flex flex-1 flex-col overflow-hidden">
+            <span className={cn("truncate text-sm", unreadLabel ? "font-semibold" : "font-medium")}>
+              {conversation.title}
+            </span>
+            {isTyping ? (
+              <span className="flex items-center gap-1 text-xs font-medium text-primary">
+                Escribiendo
+                <TypingIndicator size="sm" />
+              </span>
             ) : (
-              conversation.title.slice(0, 2).toUpperCase()
+              <span
+                className={cn(
+                  "truncate text-xs",
+                  unreadLabel ? "font-medium text-foreground" : "text-muted-foreground",
+                )}
+              >
+                {conversation.lastMessage ? (preview ?? "…") : "Sin mensajes aún"}
+              </span>
             )}
-          </AvatarFallback>
-        </Avatar>
-        {!conversation.isGroup && (
-          <PresenceDot online={isOnline} className="absolute -right-0.5 -bottom-0.5" />
-        )}
-      </div>
-      <div className="flex flex-1 flex-col overflow-hidden">
-        <span className={cn("truncate text-sm", unreadLabel ? "font-semibold" : "font-medium")}>
-          {conversation.title}
-        </span>
-        {isTyping ? (
-          <span className="flex items-center gap-1 text-xs font-medium text-primary">
-            Escribiendo
-            <TypingIndicator size="sm" />
-          </span>
-        ) : (
-          <span
-            className={cn(
-              "truncate text-xs",
-              unreadLabel ? "font-medium text-foreground" : "text-muted-foreground",
-            )}
-          >
-            {conversation.lastMessage ? (preview ?? "…") : "Sin mensajes aún"}
-          </span>
-        )}
-      </div>
-      {unreadLabel && (
-        <Badge className="h-5 min-w-5 shrink-0 justify-center rounded-full px-1.5 text-[10px]">
-          {unreadLabel}
-        </Badge>
-      )}
-    </button>
+          </div>
+          {unreadLabel ? (
+            <Badge className="h-5 min-w-5 shrink-0 justify-center rounded-full px-1.5 text-[10px]">
+              {unreadLabel}
+            </Badge>
+          ) : (
+            isPinned && (
+              <Pin className="size-3.5 shrink-0 text-muted-foreground group-hover/row:invisible" />
+            )
+          )}
+        </button>
+        {/* Atajo al pasar el ratón (en táctil: mantener pulsado el chat abre el menú). */}
+        <button
+          type="button"
+          onClick={() => onTogglePin(conversation.id, !isPinned)}
+          aria-label={pinLabel}
+          title={pinLabel}
+          className="absolute top-1/2 right-2 hidden -translate-y-1/2 rounded-md bg-background p-1 text-muted-foreground shadow-sm ring-1 ring-foreground/10 hover:text-foreground focus-visible:block group-hover/row:block"
+        >
+          {isPinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
+        </button>
+      </ContextMenuPrimitive.Trigger>
+      <ContextMenuPrimitive.Portal>
+        <ContextMenuPrimitive.Positioner className="isolate z-50 outline-none">
+          <ContextMenuPrimitive.Popup className="min-w-36 origin-(--transform-origin) overflow-hidden rounded-lg border bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95">
+            <ContextMenuPrimitive.Item
+              className="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-hidden select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground"
+              onClick={() => onTogglePin(conversation.id, !isPinned)}
+            >
+              {isPinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
+              {pinLabel}
+            </ContextMenuPrimitive.Item>
+          </ContextMenuPrimitive.Popup>
+        </ContextMenuPrimitive.Positioner>
+      </ContextMenuPrimitive.Portal>
+    </ContextMenuPrimitive.Root>
   );
 });
 
@@ -206,7 +247,7 @@ export function ChatSidebar({
     getConversationItemAction(conversationId)
       .then((item) => {
         if (!item) return;
-        setConversations((prev) => [item, ...prev.filter((c) => c.id !== item.id)]);
+        setConversations((prev) => sortConversations([item, ...prev.filter((c) => c.id !== item.id)]));
       })
       .catch(() => {})
       .finally(() => inflightItemsRef.current.delete(conversationId));
@@ -257,7 +298,7 @@ export function ChatSidebar({
             },
             unreadCount: isFromMe || isOpen ? prev[index].unreadCount : prev[index].unreadCount + 1,
           };
-          return [updated, ...prev.filter((_, i) => i !== index)];
+          return sortConversations([updated, ...prev.filter((_, i) => i !== index)]);
         });
         return;
       }
@@ -343,22 +384,76 @@ export function ChatSidebar({
       const result = await acceptChatRequestAction(request.id);
       if (result.success) {
         toast.success("Solicitud aceptada");
-        setConversations((prev) => [
-          {
-            id: result.conversationId!,
-            isGroup: false,
-            title: request.fromUser.username,
-            otherUser: request.fromUser,
-            members: [{ id: currentUser.userId, username: currentUser.username }, request.fromUser],
-            lastMessage: null,
-            unreadCount: 0,
-          },
-          ...prev,
-        ]);
+        setConversations((prev) =>
+          sortConversations([
+            {
+              id: result.conversationId!,
+              isGroup: false,
+              isSelf: false,
+              title: request.fromUser.username,
+              otherUser: request.fromUser,
+              members: [{ id: currentUser.userId, username: currentUser.username }, request.fromUser],
+              lastMessage: null,
+              unreadCount: 0,
+              pinnedAt: null,
+              createdAt: new Date(),
+            },
+            ...prev,
+          ]),
+        );
       } else {
         toast.error(result.error ?? "No se pudo aceptar la solicitud");
         setPendingRequests((prev) => [request, ...prev]);
       }
+    });
+  };
+
+  const handleTogglePin = useCallback((conversationId: string, pinned: boolean) => {
+    const previous = new Map<string, Date | null>();
+    // Optimista: la lista se reordena al instante y se revierte si el servidor rechaza.
+    setConversations((prev) =>
+      sortConversations(
+        prev.map((c) => {
+          if (c.id !== conversationId) return c;
+          previous.set(c.id, c.pinnedAt);
+          return { ...c, pinnedAt: pinned ? new Date() : null };
+        }),
+      ),
+    );
+    setConversationPinnedAction(conversationId, pinned)
+      .then((result) => {
+        if (result.success) return;
+        toast.error(result.error ?? "No se pudo actualizar el chat");
+        setConversations((prev) =>
+          sortConversations(
+            prev.map((c) =>
+              c.id === conversationId ? { ...c, pinnedAt: previous.get(c.id) ?? null } : c,
+            ),
+          ),
+        );
+      })
+      .catch(() => {
+        toast.error("No se pudo actualizar el chat");
+        refreshItem(conversationId);
+      });
+  }, [refreshItem]);
+
+  const hasSelfChat = conversations.some((c) => c.isSelf);
+  const [isOpeningSelf, startOpenSelf] = useTransition();
+  const handleOpenSelfChat = () => {
+    startOpenSelf(async () => {
+      const result = await openSelfChatAction();
+      if (!result.success || !result.conversationId) {
+        toast.error(result.error ?? "No se pudo abrir tus mensajes guardados");
+        return;
+      }
+      const item = await getConversationItemAction(result.conversationId);
+      if (item) {
+        setConversations((prev) =>
+          sortConversations([item, ...prev.filter((c) => c.id !== item.id)]),
+        );
+      }
+      openConversation(result.conversationId);
     });
   };
 
@@ -534,9 +629,29 @@ export function ChatSidebar({
         <TabsContent value="chats" className="flex-1 overflow-hidden">
           <ScrollArea className="h-full">
             <div className="flex flex-col gap-1 py-2">
-              {conversations.length === 0 && (
+              {!hasSelfChat && (
+                <button
+                  type="button"
+                  onClick={handleOpenSelfChat}
+                  disabled={isOpeningSelf}
+                  className="flex items-center gap-2.5 rounded-lg p-2 text-left transition-colors hover:bg-muted disabled:opacity-60"
+                >
+                  <Avatar>
+                    <AvatarFallback>
+                      <Bookmark className="size-4" />
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="flex flex-1 flex-col overflow-hidden">
+                    <span className="truncate text-sm font-medium">Mensajes guardados</span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      Escríbete notas y guarda archivos
+                    </span>
+                  </div>
+                </button>
+              )}
+              {conversations.length === 0 && hasSelfChat && (
                 <p className="p-3 text-center text-xs text-muted-foreground">
-                  Aún no tienes conversaciones. Busca un usuario para empezar.
+                  Busca un usuario para empezar otra conversación.
                 </p>
               )}
               {conversations.map((conversation) => (
@@ -550,6 +665,7 @@ export function ChatSidebar({
                   }
                   isTyping={typingConversationIds.has(conversation.id)}
                   onOpen={openConversation}
+                  onTogglePin={handleTogglePin}
                 />
               ))}
             </div>
@@ -613,7 +729,7 @@ export function ChatSidebar({
         onOpenChange={setIsGroupOpen}
         currentUser={currentUser}
         onCreated={(conversation) => {
-          setConversations((prev) => [conversation, ...prev]);
+          setConversations((prev) => sortConversations([conversation, ...prev]));
           openConversation(conversation.id);
         }}
       />

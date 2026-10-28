@@ -1,5 +1,8 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
+import { sortConversations } from "@/lib/conversation-order";
+
+export const SELF_CHAT_TITLE = "Mensajes guardados";
 
 export type ConversationLastMessage = {
   /** Texto en claro: solo mensajes de sistema o previos al E2EE. */
@@ -17,11 +20,16 @@ export type ConversationLastMessage = {
 export type ConversationItem = {
   id: string;
   isGroup: boolean;
+  /** Chat contigo mismo ("Mensajes guardados"): un solo participante, tú. */
+  isSelf: boolean;
   title: string;
   otherUser: { id: string; username: string } | null;
   members: { id: string; username: string }[];
   lastMessage: ConversationLastMessage | null;
   unreadCount: number;
+  /** Fecha en que ESTE usuario fijó el chat; null si no está fijado. */
+  pinnedAt: Date | null;
+  createdAt: Date;
 };
 
 /**
@@ -40,8 +48,10 @@ export async function loadConversationItems(
     where: { userId, ...(onlyConversationId ? { conversationId: onlyConversationId } : {}) },
     select: {
       conversationId: true,
+      pinnedAt: true,
       conversation: {
         select: {
+          createdAt: true,
           isGroup: true,
           name: true,
           participants: {
@@ -82,15 +92,22 @@ export async function loadConversationItems(
   `;
   const unread = new Map(unreadRows.map((r) => [r.conversationId, Number(r.unreadCount)]));
 
-  const items = participations.map(({ conversationId, conversation }) => {
+  const items = participations.map(({ conversationId, conversation, pinnedAt }) => {
     const members = conversation.participants.map((p) => p.user);
     const other = conversation.participants.find((p) => p.userId !== userId)?.user;
-    const otherUser = conversation.isGroup ? null : (other ?? { id: "", username: "Usuario" });
+    // Chat 1:1 sin "otra persona" = chat contigo mismo.
+    const isSelf = !conversation.isGroup && !other;
+    const otherUser = conversation.isGroup || isSelf ? null : (other ?? { id: "", username: "Usuario" });
     const last = conversation.messages[0];
     return {
       id: conversationId,
       isGroup: conversation.isGroup,
-      title: conversation.isGroup ? (conversation.name ?? "Grupo") : (otherUser?.username ?? "Usuario"),
+      isSelf,
+      title: conversation.isGroup
+        ? (conversation.name ?? "Grupo")
+        : isSelf
+          ? SELF_CHAT_TITLE
+          : (otherUser?.username ?? "Usuario"),
       otherUser,
       members,
       lastMessage: last
@@ -106,14 +123,13 @@ export async function loadConversationItems(
           }
         : null,
       unreadCount: unread.get(conversationId) ?? 0,
+      pinnedAt,
+      createdAt: conversation.createdAt,
     };
   });
 
-  // Más reciente primero (como WhatsApp); sin mensajes, al final.
-  return items.sort(
-    (a, b) =>
-      (b.lastMessage?.createdAt.getTime() ?? 0) - (a.lastMessage?.createdAt.getTime() ?? 0),
-  );
+  // Fijados primero; luego el más reciente primero (como WhatsApp).
+  return sortConversations(items);
 }
 
 

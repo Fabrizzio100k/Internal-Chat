@@ -131,6 +131,8 @@ model ConversationParticipant {
   lastReadAt     DateTime?
   joinedAt       DateTime     @default(now())
   role           ParticipantRole @default(MEMBER)
+  // Chat fijado arriba de la lista. Es por usuario; null = no fijado.
+  pinnedAt       DateTime?
 
   @@unique([conversationId, userId])
   @@index([userId])

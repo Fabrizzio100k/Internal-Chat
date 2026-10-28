@@ -23,6 +23,7 @@ type Props = {
   onOpenChange: (open: boolean) => void;
   conversationId: string;
   isGroup: boolean;
+  isSelf?: boolean;
   /** Se llamó a trustCurrentKey: la ventana de chat debe recargar el estado de claves. */
   onTrustChanged: () => void;
 };
@@ -32,7 +33,7 @@ export function EncryptionDialog(props: Props) {
   return props.open ? <EncryptionDialogInner {...props} /> : null;
 }
 
-function EncryptionDialogInner({ onOpenChange, conversationId, isGroup, onTrustChanged }: Props) {
+function EncryptionDialogInner({ onOpenChange, conversationId, isGroup, isSelf, onTrustChanged }: Props) {
   const [people, setPeople] = useState<PersonVerification[] | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -87,7 +88,11 @@ function EncryptionDialogInner({ onOpenChange, conversationId, isGroup, onTrustC
               <Loader2 className="size-3.5 animate-spin" /> Cargando...
             </p>
           ) : people.length === 0 ? (
-            <p className="p-3 text-xs text-muted-foreground">No hay otras personas en la conversación.</p>
+            <p className="p-3 text-xs text-muted-foreground">
+              {isSelf
+                ? "Este chat es solo tuyo: la clave solo existe en tus dispositivos, no hay nadie más con quien verificar."
+                : "No hay otras personas en la conversación."}
+            </p>
           ) : (
             <ul className="flex flex-col gap-3">
               {people.map((person) => (

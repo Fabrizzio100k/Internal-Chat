@@ -12,7 +12,7 @@ import { useDropzone } from "react-dropzone";
 import { useRouter } from "next/navigation";
 import { ChatSearchDialog } from "@/components/chat/chat-search-dialog";
 import { AnimatePresence, motion } from "framer-motion";
-import { Loader2, Lock, Menu, Search, ShieldAlert, UploadCloud, Users } from "lucide-react";
+import { Bookmark, Loader2, Lock, Menu, Search, ShieldAlert, UploadCloud, Users } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -64,6 +64,7 @@ export function ChatWindow({
   conversationId,
   currentUser,
   isGroup,
+  isSelf = false,
   title,
   otherUser,
   members: initialMembers,
@@ -75,6 +76,8 @@ export function ChatWindow({
   conversationId: string;
   currentUser: SessionUser;
   isGroup: boolean;
+  /** Chat contigo mismo ("Mensajes guardados"). */
+  isSelf?: boolean;
   title: string;
   otherUser: Member | null;
   members: GroupMember[];
@@ -569,6 +572,20 @@ export function ChatWindow({
               </span>
             </div>
           </button>
+        ) : isSelf ? (
+          <>
+            <Avatar>
+              <AvatarFallback>
+                <Bookmark className="size-4" />
+              </AvatarFallback>
+            </Avatar>
+            <div className="flex min-w-0 flex-col">
+              <span className="truncate text-sm font-medium">{title}</span>
+              <span className="truncate text-xs text-muted-foreground">
+                Notas y archivos solo para ti
+              </span>
+            </div>
+          </>
         ) : (
           <>
             <div className="relative">
@@ -637,6 +654,7 @@ export function ChatWindow({
         onOpenChange={setIsEncryptionOpen}
         conversationId={conversationId}
         isGroup={isGroup}
+        isSelf={isSelf}
         onTrustChanged={() => {
           invalidateConversation(conversationId);
           void checkSecurity();

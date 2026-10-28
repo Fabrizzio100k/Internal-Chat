@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { SELF_CHAT_TITLE } from "@/lib/conversations-server";
 import { listMessagesAroundUnchecked, listMessagesPageUnchecked } from "@/lib/messages-server";
 import { ChatWindow } from "@/components/chat/chat-window";
 
@@ -34,9 +35,11 @@ export default async function ConversationPage({
   }
 
   const members = conversation.participants.map((p) => ({ ...p.user, role: p.role }));
-  const otherUser = conversation.isGroup
-    ? null
-    : (members.find((u) => u.id !== session.userId) ?? { id: "", username: "Usuario" });
+  const isSelf = !conversation.isGroup && members.every((u) => u.id === session.userId);
+  const otherUser =
+    conversation.isGroup || isSelf
+      ? null
+      : (members.find((u) => u.id !== session.userId) ?? { id: "", username: "Usuario" });
 
   // ?m=<messageId>: viene de la búsqueda; carga una ventana alrededor del mensaje.
   const targetMessageId = typeof m === "string" && m ? m : undefined;
@@ -53,7 +56,14 @@ export default async function ConversationPage({
       conversationId={conversationId}
       currentUser={session}
       isGroup={conversation.isGroup}
-      title={conversation.isGroup ? (conversation.name ?? "Grupo") : (otherUser?.username ?? "Usuario")}
+      isSelf={isSelf}
+      title={
+        conversation.isGroup
+          ? (conversation.name ?? "Grupo")
+          : isSelf
+            ? SELF_CHAT_TITLE
+            : (otherUser?.username ?? "Usuario")
+      }
       otherUser={otherUser}
       members={members}
       myRole={me.role}

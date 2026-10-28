@@ -6,6 +6,7 @@ import type { ActionResult } from "@/lib/types/chat";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { loadContacts, loadConversationItems } from "@/lib/conversations-server";
 import { findUsersWithoutKeys } from "@/lib/keys-server";
+import { MAX_PINNED_CHATS } from "@/lib/conversation-order";
 import { MESSAGE_INCLUDE } from "@/lib/messages-server";
 import {
   publishToConversation,
@@ -269,6 +270,70 @@ export async function createGroupAction(name: string, memberIds: string[]): Prom
   });
 
   return { success: true, conversationId: conversation.id };
+}
+
+/**
+ * Abre (o crea la primera vez) el chat contigo mismo, "Mensajes guardados": una
+ * conversación 1:1 con un único participante. Es idempotente; el lock evita que dos
+ * clics/pestañas simultáneas creen dos. Se cifra igual que cualquier chat: la clave
+ * se genera en el navegador al enviar el primer mensaje, envuelta solo para ti.
+ */
+export async function openSelfChatAction(): Promise<ActionResult> {
+  const session = await requireSession();
+
+  const conversationId = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`self-chat:${session.userId}`}))`;
+
+    const existing = await tx.conversation.findFirst({
+      where: {
+        isGroup: false,
+        participants: { some: { userId: session.userId }, every: { userId: session.userId } },
+      },
+      select: { id: true },
+    });
+    if (existing) return existing.id;
+
+    const created = await tx.conversation.create({
+      data: { participants: { create: [{ userId: session.userId }] } },
+      select: { id: true },
+    });
+    return created.id;
+  });
+
+  return { success: true, conversationId };
+}
+
+/** Fija o desfija un chat para el usuario actual (es una preferencia solo suya). */
+export async function setConversationPinnedAction(
+  conversationId: string,
+  pinned: boolean,
+): Promise<ActionResult> {
+  const session = await requireSession();
+
+  const participation = await prisma.conversationParticipant.findUnique({
+    where: { conversationId_userId: { conversationId, userId: session.userId } },
+    select: { pinnedAt: true },
+  });
+  if (!participation) return { success: false, error: "No tienes acceso a esta conversación" };
+
+  if (pinned) {
+    if (participation.pinnedAt) return { success: true };
+    const count = await prisma.conversationParticipant.count({
+      where: { userId: session.userId, pinnedAt: { not: null } },
+    });
+    if (count >= MAX_PINNED_CHATS) {
+      return {
+        success: false,
+        error: `Solo puedes fijar hasta ${MAX_PINNED_CHATS} chats. Desfija uno primero.`,
+      };
+    }
+  }
+
+  await prisma.conversationParticipant.update({
+    where: { conversationId_userId: { conversationId, userId: session.userId } },
+    data: { pinnedAt: pinned ? new Date() : null },
+  });
+  return { success: true };
 }
 
 /** Marca una conversación como leída (una sola query; updateMany filtra por pertenencia). */
