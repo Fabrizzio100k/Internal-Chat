@@ -61,7 +61,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "encSize inválido" }, { status: 400 });
     }
     if (a.encSize > MAX_ENCRYPTED_FILE_BYTES) {
-      return NextResponse.json({ error: "El archivo supera el límite de 20MB" }, { status: 413 });
+      return NextResponse.json({ error: "El archivo supera el límite de 100MB" }, { status: 413 });
     }
     seenRefs.add(a.ref);
     attachments.push({ ref: a.ref, encSize: a.encSize });

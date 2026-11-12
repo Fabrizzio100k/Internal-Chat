@@ -21,7 +21,7 @@ import type { MessageData } from "@/components/chat/message-item";
 import { decryptWireMessages } from "@/lib/e2ee/messages";
 import { sendFilesMessage } from "@/lib/e2ee/outgoing";
 
-const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024;
+const MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024;
 const MAX_MESSAGE_LENGTH = 5000;
 const MAX_ATTACHMENTS = 10;
 
@@ -69,7 +69,7 @@ export const MessageComposer = memo(
             break;
           }
           if (file.size > MAX_FILE_SIZE_BYTES) {
-            toast.error(`"${file.name}" supera el límite de 20MB`);
+            toast.error(`"${file.name}" supera el límite de 100MB`);
             continue;
           }
           accepted.push(createPendingAttachment(file));

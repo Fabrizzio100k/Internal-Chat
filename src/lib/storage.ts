@@ -8,7 +8,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
-export const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024; // 20MB de archivo en claro
+export const MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024; // 100MB de archivo en claro
 // El blob cifrado añade iv (12) + etiqueta GCM (16) al archivo original.
 export const MAX_ENCRYPTED_FILE_BYTES = MAX_FILE_SIZE_BYTES + 28;
 

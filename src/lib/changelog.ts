@@ -19,6 +19,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "1.1.0",
+    date: "2026-11-12",
+    title: "Archivos de hasta 100 MB",
+    highlights: [
+      "Ahora puedes enviar archivos de hasta 100 MB (antes el límite era 20 MB).",
+    ],
+  },
+  {
     version: "1.0.1",
     date: "2026-10-28",
     title: "Avisos visibles y avatar sincronizado",
